@@ -60,6 +60,43 @@ perform_cleanup
 EOF
 }
 
+@test "orphaned leftover mdfind timeout does not cancel later sections (#1584)" {
+    mkdir -p "$HOME/Library/Caches/com.example.stale"
+    touch -t 200001010000 "$HOME/Library/Caches/com.example.stale"
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" MOLE_DRY_RUN=1 \
+        /bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/bin/clean.sh"
+for fn in clean_user_essentials clean_finder_metadata clean_app_caches \
+    clean_browsers run_cloud_and_office_cleanup clean_developer_tools \
+    clean_user_gui_applications clean_virtualization_tools \
+    clean_application_support_logs \
+    clean_orphaned_system_services clean_orphaned_container_stubs \
+    show_user_launch_agent_hint_notice \
+    clean_apple_silicon_caches clean_cached_device_firmware \
+    clean_time_machine_failed_backups check_large_file_candidates \
+    show_project_artifact_hint_notice; do
+    eval "$fn() { return 0; }"
+done
+scan_installed_apps() { : > "$1"; }
+run_with_timeout() {
+    local _timeout="$1"
+    shift
+    if [[ "$1" == mdfind ]]; then
+        return 124
+    fi
+    "$@"
+}
+check_large_file_candidates() { echo LATER_SECTION; return 0; }
+perform_cleanup
+EOF
+
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"LATER_SECTION"* ]] || return 1
+    [[ "$output" == *"Dry run complete"* ]] || return 1
+    [[ "$output" != *"Dry run cancelled"* ]] || return 1
+}
+
 @test "sizing timeout (124) still prints the summary (#1342)" {
     run_perform_cleanup_with 124
 
