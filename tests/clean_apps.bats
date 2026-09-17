@@ -822,6 +822,11 @@ orphan_cleanup_candidate_snapshot() {
     _ORPHAN_CANDIDATE_TARGET_ID="t"
     return 0
 }
+# Pin eligibility: the real guard walks /Applications via
+# bundle_has_installed_app, and a 5s deadline fail-closes as "installed"
+# on a loaded CI Mac, so neither leftover would reach the sink.
+orphan_cleanup_candidate_still_eligible() { return 0; }
+bundle_has_installed_app() { return 1; }
 get_path_size_kb() {
     if [[ "$1" == *com.example.slow* ]]; then
         echo "SLOW_SIZED" >&2
@@ -888,6 +893,8 @@ orphan_cleanup_candidate_snapshot() {
     _ORPHAN_CANDIDATE_TARGET_ID="t"
     return 0
 }
+orphan_cleanup_candidate_still_eligible() { return 0; }
+bundle_has_installed_app() { return 1; }
 get_path_size_kb() { echo 12; }
 safe_clean() {
     printf 'CLEANED:%s\n' "$(basename "$1")"

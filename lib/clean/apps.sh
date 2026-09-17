@@ -699,63 +699,63 @@ clean_orphaned_app_data() {
         fi
         local claude_result_rc=0
         if [[ $claude_scan_rc -eq 0 ]]; then
-        while IFS= read -r -d '' claude_vm_bundle; do
-            local claude_orphan_rc=0
-            is_claude_vm_bundle_orphaned \
-                "$claude_vm_bundle" "$installed_bundles" || claude_orphan_rc=$?
-            if [[ $claude_orphan_rc -ge 128 ]]; then
-                claude_result_rc=$claude_orphan_rc
-                break
-            elif [[ $claude_orphan_rc -eq 0 ]]; then
-                if is_path_whitelisted "$claude_vm_bundle"; then
-                    debug_log "Skipping whitelisted orphan: $claude_vm_bundle"
-                    continue
-                fi
-                local _ORPHAN_CANDIDATE_IDENTITY=""
-                local _ORPHAN_CANDIDATE_PARENT=""
-                local _ORPHAN_CANDIDATE_PARENT_ID=""
-                local _ORPHAN_CANDIDATE_TARGET_ID=""
-                local claude_vm_snapshot_rc=0
-                orphan_cleanup_candidate_snapshot \
-                    "$claude_vm_bundle" || claude_vm_snapshot_rc=$?
-                if [[ $claude_vm_snapshot_rc -ge 128 ]]; then
-                    claude_result_rc=$claude_vm_snapshot_rc
+            while IFS= read -r -d '' claude_vm_bundle; do
+                local claude_orphan_rc=0
+                is_claude_vm_bundle_orphaned \
+                    "$claude_vm_bundle" "$installed_bundles" || claude_orphan_rc=$?
+                if [[ $claude_orphan_rc -ge 128 ]]; then
+                    claude_result_rc=$claude_orphan_rc
                     break
-                elif [[ $claude_vm_snapshot_rc -ne 0 || -z "$_ORPHAN_CANDIDATE_IDENTITY" ]]; then
-                    continue
-                fi
-                local claude_vm_identity="$_ORPHAN_CANDIDATE_IDENTITY"
-                local claude_vm_parent="$_ORPHAN_CANDIDATE_PARENT"
-                local claude_vm_parent_id="$_ORPHAN_CANDIDATE_PARENT_ID"
-                local claude_vm_target_id="$_ORPHAN_CANDIDATE_TARGET_ID"
-                local claude_vm_size_kb
-                local claude_vm_size_rc=0
-                claude_vm_size_kb=$(get_path_size_kb "$claude_vm_bundle") || claude_vm_size_rc=$?
-                if [[ $claude_vm_size_rc -ge 128 ]]; then
-                    claude_result_rc=$claude_vm_size_rc
-                    break
-                fi
-                if [[ -n "$claude_vm_size_kb" && "$claude_vm_size_kb" != "0" ]]; then
-                    local _ORPHAN_CLEANUP_EXPECTED_IDENTITY="$claude_vm_identity"
-                    local _ORPHAN_CLEANUP_EXPECTED_PARENT="$claude_vm_parent"
-                    local _ORPHAN_CLEANUP_EXPECTED_PARENT_ID="$claude_vm_parent_id"
-                    local _ORPHAN_CLEANUP_EXPECTED_TARGET_ID="$claude_vm_target_id"
-                    local _ORPHAN_CLEANUP_BUNDLE_ID="com.anthropic.claudefordesktop"
-                    local _ORPHAN_CLEANUP_KIND="claude"
-                    local claude_clean_rc=0
-                    safe_clean_guarded orphan_cleanup_candidate_still_eligible \
-                        "$claude_vm_bundle" \
-                        "Orphaned Claude workspace VM" || claude_clean_rc=$?
-                    if [[ $claude_clean_rc -eq 124 || $claude_clean_rc -ge 128 ]]; then
-                        claude_result_rc=$claude_clean_rc
+                elif [[ $claude_orphan_rc -eq 0 ]]; then
+                    if is_path_whitelisted "$claude_vm_bundle"; then
+                        debug_log "Skipping whitelisted orphan: $claude_vm_bundle"
+                        continue
+                    fi
+                    local _ORPHAN_CANDIDATE_IDENTITY=""
+                    local _ORPHAN_CANDIDATE_PARENT=""
+                    local _ORPHAN_CANDIDATE_PARENT_ID=""
+                    local _ORPHAN_CANDIDATE_TARGET_ID=""
+                    local claude_vm_snapshot_rc=0
+                    orphan_cleanup_candidate_snapshot \
+                        "$claude_vm_bundle" || claude_vm_snapshot_rc=$?
+                    if [[ $claude_vm_snapshot_rc -ge 128 ]]; then
+                        claude_result_rc=$claude_vm_snapshot_rc
                         break
-                    elif [[ $claude_clean_rc -eq 0 ]]; then
-                        orphaned_count=$((orphaned_count + 1))
-                        total_orphaned_kb=$((total_orphaned_kb + claude_vm_size_kb))
+                    elif [[ $claude_vm_snapshot_rc -ne 0 || -z "$_ORPHAN_CANDIDATE_IDENTITY" ]]; then
+                        continue
+                    fi
+                    local claude_vm_identity="$_ORPHAN_CANDIDATE_IDENTITY"
+                    local claude_vm_parent="$_ORPHAN_CANDIDATE_PARENT"
+                    local claude_vm_parent_id="$_ORPHAN_CANDIDATE_PARENT_ID"
+                    local claude_vm_target_id="$_ORPHAN_CANDIDATE_TARGET_ID"
+                    local claude_vm_size_kb
+                    local claude_vm_size_rc=0
+                    claude_vm_size_kb=$(get_path_size_kb "$claude_vm_bundle") || claude_vm_size_rc=$?
+                    if [[ $claude_vm_size_rc -ge 128 ]]; then
+                        claude_result_rc=$claude_vm_size_rc
+                        break
+                    fi
+                    if [[ -n "$claude_vm_size_kb" && "$claude_vm_size_kb" != "0" ]]; then
+                        local _ORPHAN_CLEANUP_EXPECTED_IDENTITY="$claude_vm_identity"
+                        local _ORPHAN_CLEANUP_EXPECTED_PARENT="$claude_vm_parent"
+                        local _ORPHAN_CLEANUP_EXPECTED_PARENT_ID="$claude_vm_parent_id"
+                        local _ORPHAN_CLEANUP_EXPECTED_TARGET_ID="$claude_vm_target_id"
+                        local _ORPHAN_CLEANUP_BUNDLE_ID="com.anthropic.claudefordesktop"
+                        local _ORPHAN_CLEANUP_KIND="claude"
+                        local claude_clean_rc=0
+                        safe_clean_guarded orphan_cleanup_candidate_still_eligible \
+                            "$claude_vm_bundle" \
+                            "Orphaned Claude workspace VM" || claude_clean_rc=$?
+                        if [[ $claude_clean_rc -eq 124 || $claude_clean_rc -ge 128 ]]; then
+                            claude_result_rc=$claude_clean_rc
+                            break
+                        elif [[ $claude_clean_rc -eq 0 ]]; then
+                            orphaned_count=$((orphaned_count + 1))
+                            total_orphaned_kb=$((total_orphaned_kb + claude_vm_size_kb))
+                        fi
                     fi
                 fi
-            fi
-        done < "$claude_scan_file"
+            done < "$claude_scan_file"
         fi
         rm -f -- "$claude_scan_file" 2> /dev/null || true # SAFE: exact tracked temp file created above
         if [[ $claude_result_rc -ne 0 ]]; then
