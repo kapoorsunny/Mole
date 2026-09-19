@@ -156,7 +156,6 @@ Clean Your Mac
 ➤ Developer tools
   ✓ npm cache · cleaned
   ◎ pnpm cache · skipped (pnpm busy)
-  ✓ Xcode runtime volumes · removed 2, 3 in use
 
 ======================================================================
 Cleanup complete

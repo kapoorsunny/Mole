@@ -4293,7 +4293,7 @@ EOF
     [[ "$output" != *"Foo Bar"* ]] || return 1
 }
 
-@test "batch uninstall reports an inconclusive Homebrew scan before any removal" {
+@test "batch uninstall reports an inconclusive Homebrew scan before any removal (#1579, #1580)" {
     run env HOME="$HOME/batch-brew-failure" PROJECT_ROOT="$PROJECT_ROOT" \
         /bin/bash --noprofile --norc <<'INNER'
 set -euo pipefail
