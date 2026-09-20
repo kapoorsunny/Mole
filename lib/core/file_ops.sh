@@ -252,12 +252,22 @@ _mole_is_user_cache_sqlite_family_path() {
 # Exact browser partial-download files directly under Downloads. These may be
 # actively written even when their browser process name is unavailable, so the
 # final deletion gate must recheck the file handle itself.
+# A partial download is a mutable file some process may still be writing, not a
+# rebuildable cache, so callers gate it on an open-handle probe instead of size
+# or age. Homebrew's cache belongs here for the same reason the browser roots
+# do: `brew fetch` writes `<sha>--<name>.incomplete` and holds it open for the
+# length of the transfer, and a blanket sweep of that directory deleted six
+# in-flight cask downloads out from under a running fetch (#1594).
 _mole_is_incomplete_download_path() {
     local downloads_root="${HOME%/}/Downloads"
+    local brew_downloads="${HOME%/}/Library/Caches/Homebrew/downloads"
     local path="$1"
     case "$path" in
         "$downloads_root"/*.download | "$downloads_root"/*.crdownload | "$downloads_root"/*.part)
             [[ "${path#"$downloads_root"/}" != */* ]]
+            ;;
+        "$brew_downloads"/*.incomplete)
+            [[ "${path#"$brew_downloads"/}" != */* ]]
             ;;
         *) return 1 ;;
     esac
@@ -616,7 +626,14 @@ _mole_paths_have_open_handle() {
 
     local lsof_rc=0
     local open_records=""
-    open_records=$(_mole_run_complete_lsof "$MOLE_TIMEOUT_QUICK_DETECT_SEC" \
+    # MO_DEBUG=0 on the capture, because this buffer is EVIDENCE, not output:
+    # an empty stderr is what makes rc=1 mean "conclusively idle" below. With
+    # the flag on, run_with_timeout writes its own "[TIMEOUT] Running with ..."
+    # line into the same stream, the buffer is never empty, and every probe
+    # downgrades to "could not tell". Measured on this Mac: 10 of 25 real cache
+    # databases flipped from cleanable to kept under `mo clean --debug`, so the
+    # flag meant to explain the run was quietly changing it.
+    open_records=$(MO_DEBUG=0 _mole_run_complete_lsof "$MOLE_TIMEOUT_QUICK_DETECT_SEC" \
         -F n -- "$@" 2>&1) || lsof_rc=$?
     if [[ $lsof_rc -eq 124 || $lsof_rc -ge 128 ]]; then
         return "$lsof_rc"
@@ -675,10 +692,10 @@ _mole_container_cache_has_open_handle() {
     local lsof_rc=0
     local records=""
     if [[ -d "$path" ]]; then
-        records=$(_mole_run_complete_lsof "$probe_timeout" \
+        records=$(MO_DEBUG=0 _mole_run_complete_lsof "$probe_timeout" \
             -F pfn +D "$path" 2>&1) || lsof_rc=$?
     else
-        records=$(_mole_run_complete_lsof "$probe_timeout" \
+        records=$(MO_DEBUG=0 _mole_run_complete_lsof "$probe_timeout" \
             -F pfn -- "$path" 2>&1) || lsof_rc=$?
     fi
 

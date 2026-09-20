@@ -1246,6 +1246,40 @@ EOF
     [[ "$output" != *"SAFE_CLEAN:Codex CLI runtimes|$HOME/.cache/codex-runtimes/codex-primary-runtime"* ]]
 }
 
+@test "clean_codex_runtimes sizes manual review by what survives the run" {
+    mkdir -p "$HOME/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin"
+    touch "$HOME/.cache/codex-runtimes/codex-primary-runtime/runtime.json"
+    touch "$HOME/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node"
+    mkdir -p "$HOME/.cache/codex-runtimes/incomplete-old"
+
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" DRY_RUN=false /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/dev.sh"
+safe_clean() { echo "SAFE_CLEAN:$2|$1"; }
+pgrep() { return 1; }
+is_path_whitelisted() { return 1; }
+get_path_size_kb() {
+    case "$1" in
+        */codex-primary-runtime) echo 1024 ;;
+        */incomplete-old) echo 4096 ;;
+        *) echo 999999 ;;
+    esac
+}
+bytes_to_human() { echo "$(($1 / 1024))KB"; }
+note_activity() { :; }
+clean_codex_runtimes
+EOF
+
+    [ "$status" -eq 0 ]
+    # The stale directory is removed by this very run, so its bytes must not be
+    # announced as something the user still has to look at.
+    [[ "$output" == *"SAFE_CLEAN:"*"incomplete-old"* ]] || return 1
+    [[ "$output" == *"Codex runtimes · manual review (1024KB)"* ]] || return 1
+    [[ "$output" != *"5120KB"* ]] || return 1
+    [[ "$output" != *"999999KB"* ]] || return 1
+}
+
 @test "clean_codex_runtimes cleans only stale incomplete runtime dirs" {
     mkdir -p "$HOME/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin"
     mkdir -p "$HOME/.cache/codex-runtimes/incomplete-old"

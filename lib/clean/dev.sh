@@ -4678,27 +4678,6 @@ is_codex_runtime_stale() {
     return 1
 }
 
-_codex_runtime_size_human() {
-    local target="$1"
-    local output_var="$2"
-    local size_kb=0
-
-    if declare -f get_path_size_kb > /dev/null 2>&1; then
-        local size_rc=0
-        size_kb=$(get_path_size_kb "$target" 2> /dev/null) || size_rc=$?
-        [[ $size_rc -eq 0 ]] || _mole_record_clean_cancellation "$size_rc"
-        [[ $size_rc -eq 0 ]] || return "$size_rc"
-    fi
-
-    local formatted_size
-    if declare -f bytes_to_human > /dev/null 2>&1; then
-        formatted_size=$(bytes_to_human "$((size_kb * 1024))")
-    else
-        formatted_size="${size_kb} KB"
-    fi
-    printf -v "$output_var" '%s' "$formatted_size"
-}
-
 _codex_runtime_delete_guard_allows() {
     mole_clean_process_guard codex_runtime_process_state "Codex started" || return 1
 
@@ -4782,10 +4761,47 @@ clean_codex_runtimes() {
         return 0
     fi
 
-    local size_human=""
-    _codex_runtime_size_human "$runtime_root" size_human || return $?
-    echo -e "  ${GRAY}${ICON_REVIEW}${NC} Codex runtimes · manual review (${size_human})"
-    note_activity
+    # Size what this run LEAVES, not the whole root. The header used to measure
+    # `$runtime_root`, which still contains the stale directories the loop below
+    # is about to delete, so the number counted bytes that were gone by the time
+    # the user read it: 1.68GB announced on a root where 140MB was cleaned in
+    # the same pass (measured 2026-09-20). Everything the loop keeps is in
+    # scope, whitelisted and active runtimes included, because those are exactly
+    # what stays on disk afterwards; only the entries this run removes drop out.
+    local -a review_dirs=()
+    while IFS= read -r -d '' runtime_dir; do
+        if declare -f is_path_whitelisted > /dev/null 2>&1 && is_path_whitelisted "$runtime_dir"; then
+            review_dirs+=("$runtime_dir")
+            continue
+        fi
+        if is_codex_runtime_active "$runtime_dir" || ! is_codex_runtime_stale "$runtime_dir"; then
+            review_dirs+=("$runtime_dir")
+        fi
+    done < <(command find "$runtime_root" -mindepth 1 -maxdepth 1 -type d -print0 2> /dev/null)
+
+    if [[ ${#review_dirs[@]} -gt 0 ]]; then
+        local review_kb=0
+        local review_dir
+        for review_dir in "${review_dirs[@]}"; do
+            local entry_kb=0
+            if declare -f get_path_size_kb > /dev/null 2>&1; then
+                local size_rc=0
+                entry_kb=$(get_path_size_kb "$review_dir" 2> /dev/null) || size_rc=$?
+                if [[ $size_rc -ne 0 ]]; then
+                    _mole_record_clean_cancellation "$size_rc"
+                    return "$size_rc"
+                fi
+            fi
+            [[ "$entry_kb" =~ ^[0-9]+$ ]] || entry_kb=0
+            review_kb=$((review_kb + entry_kb))
+        done
+        local size_human="${review_kb} KB"
+        if declare -f bytes_to_human > /dev/null 2>&1; then
+            size_human=$(bytes_to_human "$((review_kb * 1024))")
+        fi
+        echo -e "  ${GRAY}${ICON_REVIEW}${NC} Codex runtimes · manual review (${size_human})"
+        note_activity
+    fi
 
     while IFS= read -r -d '' runtime_dir; do
         if declare -f is_path_whitelisted > /dev/null 2>&1 && is_path_whitelisted "$runtime_dir"; then
@@ -5337,19 +5353,10 @@ clean_developer_tools() {
     # for ~94s before its first output on the next run.
     _run_developer_cleanup_step \
         safe_clean ~/Library/Caches/Homebrew/downloads/* "Homebrew cache" || return $?
-    local brew_lock_dirs=(
-        "/opt/homebrew/var/homebrew/locks"
-        "/usr/local/var/homebrew/locks"
-    )
-    for lock_dir in "${brew_lock_dirs[@]}"; do
-        if [[ -d "$lock_dir" && -w "$lock_dir" ]]; then
-            _run_developer_cleanup_step \
-                safe_clean "$lock_dir"/* "Homebrew lock files" || return $?
-        elif [[ -d "$lock_dir" ]]; then
-            if find "$lock_dir" -mindepth 1 -maxdepth 1 -print -quit 2> /dev/null | grep -q .; then
-                debug_log "Skipping read-only Homebrew locks in $lock_dir"
-            fi
-        fi
-    done
+    # Homebrew's lock directory is deliberately not swept. Every file in it is
+    # zero bytes, so the whole directory reclaims nothing measurable, while
+    # deleting a lock a running `brew fetch` still holds makes that fetch fail
+    # with `No such file or directory @ dir_s_rmdir` (#1594). `brew cleanup`
+    # below already prunes what is genuinely stale, under Homebrew's own locking.
     _run_developer_cleanup_step clean_homebrew || return $?
 }

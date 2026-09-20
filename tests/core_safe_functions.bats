@@ -463,6 +463,52 @@ EOF
     [[ "$output" == *"RC=1 TRACE=visibility,"* ]]
 }
 
+@test "validate_path_for_deletion gates Homebrew partial downloads on lsof too (#1594)" {
+    local partial="$HOME/Library/Caches/Homebrew/downloads/abc123--Some App.dmg.incomplete"
+    mkdir -p "$(dirname "$partial")"
+    printf 'partial\n' > "$partial"
+
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" partial="$partial" /bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+trace_file=$(mktemp)
+lsof() {
+    case " $* " in
+        *" -p 1 "*) printf 'visibility\n' >> "$trace_file"; return 1 ;;
+        *) printf 'target\n' >> "$trace_file"; return 1 ;;
+    esac
+}
+run_with_timeout() { shift; "$@"; }
+validation_rc=0
+validate_path_for_deletion "$partial" || validation_rc=$?
+printf 'RC=%s TRACE=%s\n' "$validation_rc" "$(tr '\n' ',' < "$trace_file")"
+command rm -f "$trace_file"
+EOF
+
+    [ "$status" -eq 0 ] || return 1
+    [[ "$output" == *"RC=1 TRACE=visibility,"* ]]
+}
+
+@test "a finished Homebrew download is not treated as a partial (#1594)" {
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+brew="$HOME/Library/Caches/Homebrew/downloads"
+# The gate covers in-flight transfers only; a completed artifact and a nested
+# path stay ordinary cache so the sweep keeps reclaiming them.
+_mole_is_incomplete_download_path "$brew/abc--App.dmg.incomplete" && echo "INCOMPLETE:yes"
+_mole_is_incomplete_download_path "$brew/abc--App.dmg" || echo "FINISHED:no"
+_mole_is_incomplete_download_path "$brew/nested/abc--App.dmg.incomplete" || echo "NESTED:no"
+_mole_is_incomplete_download_path "$HOME/Downloads/pending.crdownload" && echo "BROWSER:yes"
+EOF
+
+    [ "$status" -eq 0 ] || return 1
+    [[ "$output" == *"INCOMPLETE:yes"* ]] || return 1
+    [[ "$output" == *"FINISHED:no"* ]] || return 1
+    [[ "$output" == *"NESTED:no"* ]] || return 1
+    [[ "$output" == *"BROWSER:yes"* ]]
+}
+
 @test "complete lsof mode accepts only a root-owned pid 1 record (#1471)" {
     local record_state
     for record_state in root nonroot; do
@@ -547,6 +593,46 @@ EOF
 
     [ "$status" -eq 0 ] || return 1
     [[ "$output" == *"STATE=2"* ]] || return 1
+}
+
+@test "the debug flag never changes an open-handle verdict (#1439)" {
+    # The probe folds lsof stderr into the buffer whose emptiness is what makes
+    # rc=1 mean "conclusively idle". run_with_timeout traces to that same stream
+    # under MO_DEBUG=1, so --debug left the buffer never empty and downgraded
+    # every probe to "could not tell". Measured before the fix: 10 of 25 real
+    # cache databases flipped from cleanable to kept, which means the flag meant
+    # to explain a run was quietly changing it. The stub below reproduces the
+    # trace on purpose; a stub that swallows it cannot see this class at all.
+    local idle="$HOME/Library/Caches/example.idle/Cache.db"
+    mkdir -p "$(dirname "$idle")"
+    printf 'idle\n' > "$idle"
+
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" idle="$idle" \
+        /bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+_MOLE_COMPLETE_LSOF_MODE=direct
+lsof() { return 1; }
+run_with_timeout() {
+    local duration="$1"
+    shift
+    if [[ "${MO_DEBUG:-0}" == "1" ]]; then
+        echo "[TIMEOUT] Running with ${duration}s timeout: $*" >&2
+    fi
+    "$@"
+}
+export MO_DEBUG=0
+quiet=0
+_mole_paths_have_open_handle "$idle" || quiet=$?
+export MO_DEBUG=1
+loud=0
+_mole_paths_have_open_handle "$idle" || loud=$?
+printf 'QUIET=%s LOUD=%s\n' "$quiet" "$loud"
+EOF
+
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"QUIET=1"* ]] || { echo "$output"; return 1; }
+    [[ "$output" == *"LOUD=1"* ]] || { echo "$output"; return 1; }
 }
 
 @test "safe_remove rechecks incomplete downloads at the final deletion boundary (#1471)" {

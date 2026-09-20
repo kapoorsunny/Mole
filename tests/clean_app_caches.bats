@@ -949,6 +949,114 @@ EOF
     [[ "$output" != *"users/global/"* ]] || return 1
 }
 
+@test "clean_notion_service_worker_caches targets CacheStorage in every Electron partition" {
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+partitions="$HOME/Library/Application Support/Notion/Partitions"
+mkdir -p "$partitions/notion/Service Worker/CacheStorage"
+mkdir -p "$partitions/notion-second/Service Worker/CacheStorage"
+# A partition with no Service Worker cache, and the siblings that must survive.
+mkdir -p "$partitions/empty-partition"
+mkdir -p "$partitions/notion/Service Worker/ScriptCache"
+mkdir -p "$partitions/notion/Service Worker/Database"
+mkdir -p "$partitions/notion/Local Storage"
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/caches.sh"
+source "$PROJECT_ROOT/lib/clean/app_caches.sh"
+notion_running() { return 1; }
+clean_service_worker_cache() { echo "SW|$1|$2|$3"; }
+clean_notion_service_worker_caches
+EOF
+
+    [ "$status" -eq 0 ] || return 1
+    local base="$HOME/Library/Application Support/Notion/Partitions"
+    [[ "$output" == *"SW|Notion|$base/notion/Service Worker/CacheStorage|_notion_service_worker_delete_guard_allows"* ]] || return 1
+    [[ "$output" == *"SW|Notion|$base/notion-second/Service Worker/CacheStorage|_notion_service_worker_delete_guard_allows"* ]] || return 1
+    [[ "$output" != *"empty-partition"* ]] || return 1
+    [[ "$output" != *"ScriptCache"* ]] || return 1
+    [[ "$output" != *"Database"* ]] || return 1
+    [[ "$output" != *"Local Storage"* ]]
+}
+
+@test "clean_notion_service_worker_caches defers every partition while Notion is running" {
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+mkdir -p "$HOME/Library/Application Support/Notion/Partitions/notion/Service Worker/CacheStorage/origin/cache"
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/caches.sh"
+source "$PROJECT_ROOT/lib/clean/app_caches.sh"
+notion_running() { return 0; }
+mole_defer_cleanup_family() { echo "DEFER:$1"; }
+safe_remove() { echo "UNEXPECTED_REMOVE:$1"; return 0; }
+clean_notion_service_worker_caches
+EOF
+
+    [ "$status" -eq 0 ] || return 1
+    [[ "$output" == *"DEFER:Notion"* ]] || return 1
+    [[ "$output" != *"UNEXPECTED_REMOVE"* ]]
+}
+
+@test "clean_notion_service_worker_caches fails closed on unknown owner state" {
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+mkdir -p "$HOME/Library/Application Support/Notion/Partitions/notion/Service Worker/CacheStorage/origin/cache"
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/caches.sh"
+source "$PROJECT_ROOT/lib/clean/app_caches.sh"
+notion_running() { return 2; }
+mole_defer_cleanup_family() { echo "UNEXPECTED_DEFER:$1"; }
+safe_remove() { echo "UNEXPECTED_REMOVE:$1"; return 0; }
+note_activity() { :; }
+clean_notion_service_worker_caches
+EOF
+
+    [ "$status" -eq 0 ] || return 1
+    [[ "$output" == *"Notion Service Worker · stopped (process state unknown)"* ]] || return 1
+    [[ "$output" != *"UNEXPECTED_REMOVE"* ]] || return 1
+    [[ "$output" != *"UNEXPECTED_DEFER"* ]]
+}
+
+@test "clean_notion_service_worker_caches refuses a symlinked partitions root" {
+    local iso="$HOME/iso-notion-root-symlink"
+    run env HOME="$iso" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+mkdir -p "$HOME/Library/Application Support/Notion" "$HOME/outside/notion/Service Worker/CacheStorage"
+touch "$HOME/outside/notion/Service Worker/CacheStorage/private"
+ln -s "$HOME/outside" "$HOME/Library/Application Support/Notion/Partitions"
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/caches.sh"
+source "$PROJECT_ROOT/lib/clean/app_caches.sh"
+notion_running() { return 1; }
+clean_service_worker_cache() { echo "SW|$2"; }
+clean_notion_service_worker_caches
+EOF
+
+    [ "$status" -eq 0 ] || return 1
+    [[ "$output" != *"outside"* ]] || return 1
+    [[ "$output" != *"SW|"* ]]
+}
+
+@test "clean_notion_service_worker_caches refuses a symlinked cache child" {
+    local iso="$HOME/iso-notion-child-symlink"
+    run env HOME="$iso" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+sw="$HOME/Library/Application Support/Notion/Partitions/notion/Service Worker"
+mkdir -p "$sw" "$HOME/outside"
+touch "$HOME/outside/private"
+ln -s "$HOME/outside" "$sw/CacheStorage"
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/caches.sh"
+source "$PROJECT_ROOT/lib/clean/app_caches.sh"
+notion_running() { return 1; }
+clean_service_worker_cache() { echo "SW|$2"; }
+clean_notion_service_worker_caches
+EOF
+
+    [ "$status" -eq 0 ] || return 1
+    [[ "$output" != *"outside"* ]] || return 1
+    [[ "$output" != *"SW|"* ]]
+}
+
 @test "clean_feishu_service_worker_caches preserves pipe characters in profile paths" {
     local pipe_home="$HOME/home|pipe"
     run env HOME="$pipe_home" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
@@ -1350,6 +1458,111 @@ JSON
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
     [[ "$output" == *"CLEAN:$ext_root/pub.obsolete-0.9.0"* ]] || return 1
     [[ "$output" != *"CLEAN:$ext_root/pub.private-1.0.0"* ]] || return 1
+}
+
+@test "only a root-level .obsolete key marks an extension, never a nested one (#1512)" {
+    # The old parser read `plutil -p` text, which carries no nesting, so a key
+    # inside a nested dict or array came back looking like a top-level
+    # extension directory name. A user whose extensions root happened to hold a
+    # directory of that name had it offered for deletion: a wrong deletion, not
+    # a missed one. RED on V1.55.0, which offers both nested names.
+    rm -rf "$HOME/.vscode" "$HOME/.vscode-insiders" "$HOME/.cursor" "$HOME/Library/Application Support/Code"
+    local ext_root="$HOME/.vscode/extensions"
+    make_extension_dir "$ext_root" "nested-in-dict" "Pub" "nd" "1.0.0"
+    make_extension_dir "$ext_root" "nested-in-array" "Pub" "na" "1.0.0"
+    make_extension_dir "$ext_root" "at-root" "Pub" "rk" "1.0.0"
+    cat > "$ext_root/.obsolete" << 'JSON'
+{
+  "outer": { "nested-in-dict": true },
+  "arr": [ { "nested-in-array": true } ],
+  "at-root": true
+}
+JSON
+    mkdir -p "$HOME/Library/Application Support/Code/User/profiles"
+
+    run_editor_extension_cleanup
+
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"CLEAN:$ext_root/at-root"* ]] || return 1
+    [[ "$output" != *"CLEAN:$ext_root/nested-in-dict"* ]] || return 1
+    [[ "$output" != *"CLEAN:$ext_root/nested-in-array"* ]] || return 1
+}
+
+@test "an empty .obsolete container does not hide the keys after it (#1512)" {
+    # plutil spells an empty container as a self-closing <dict/> / <array/>.
+    # Counting those as an opening tag desyncs the depth upward and silently
+    # drops every later root key, so the whole cleanup goes quiet. Key order in
+    # the fixture is deliberate: plutil sorts keys, so the real one must sort
+    # last to actually sit behind both empty containers.
+    rm -rf "$HOME/.vscode" "$HOME/.vscode-insiders" "$HOME/.cursor" "$HOME/Library/Application Support/Code"
+    local ext_root="$HOME/.vscode/extensions"
+    make_extension_dir "$ext_root" "zz-after-empty" "Pub" "ae" "1.0.0"
+    cat > "$ext_root/.obsolete" << 'JSON'
+{
+  "aa-emptydict": {},
+  "ab-emptyarray": [],
+  "zz-after-empty": true
+}
+JSON
+    mkdir -p "$HOME/Library/Application Support/Code/User/profiles"
+
+    run_editor_extension_cleanup
+
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"CLEAN:$ext_root/zz-after-empty"* ]] || return 1
+}
+
+@test ".obsolete keys carrying XML entities resolve to their real names (#1512)" {
+    # plutil escapes &, < and > inside a <key>. Decoding &amp; before the other
+    # two turns a key holding the literal text "&lt;" into a real "<", so the
+    # name no longer matches the directory on disk and the entry is skipped.
+    rm -rf "$HOME/.vscode" "$HOME/.vscode-insiders" "$HOME/.cursor" "$HOME/Library/Application Support/Code"
+    local ext_root="$HOME/.vscode/extensions"
+    make_extension_dir "$ext_root" 'amp&key' "Pub" "am" "1.0.0"
+    make_extension_dir "$ext_root" 'lit&lt;key' "Pub" "li" "1.0.0"
+    cat > "$ext_root/.obsolete" << 'JSON'
+{
+  "amp&key": true,
+  "lit&lt;key": true
+}
+JSON
+    mkdir -p "$HOME/Library/Application Support/Code/User/profiles"
+
+    run_editor_extension_cleanup
+
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"CLEAN:$ext_root/amp&key"* ]] || return 1
+    [[ "$output" == *"CLEAN:$ext_root/lit&lt;key"* ]] || return 1
+}
+
+@test "a .obsolete value must be boolean true, not 1 or the string true (#1512)" {
+    # The journal marks an entry stale with a boolean. Widening the match to
+    # accept anything that merely prints as 1 (which is how macOS 15 renders a
+    # boolean) would also accept a real integer, so the type has to come from
+    # the XML tag rather than from rendered text.
+    rm -rf "$HOME/.vscode" "$HOME/.vscode-insiders" "$HOME/.cursor" "$HOME/Library/Application Support/Code"
+    local ext_root="$HOME/.vscode/extensions"
+    make_extension_dir "$ext_root" "val-int-one" "Pub" "vi" "1.0.0"
+    make_extension_dir "$ext_root" "val-string-true" "Pub" "vs" "1.0.0"
+    make_extension_dir "$ext_root" "val-false" "Pub" "vf" "1.0.0"
+    make_extension_dir "$ext_root" "val-true" "Pub" "vt" "1.0.0"
+    cat > "$ext_root/.obsolete" << 'JSON'
+{
+  "val-int-one": 1,
+  "val-string-true": "true",
+  "val-false": false,
+  "val-true": true
+}
+JSON
+    mkdir -p "$HOME/Library/Application Support/Code/User/profiles"
+
+    run_editor_extension_cleanup
+
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"CLEAN:$ext_root/val-true"* ]] || return 1
+    [[ "$output" != *"CLEAN:$ext_root/val-int-one"* ]] || return 1
+    [[ "$output" != *"CLEAN:$ext_root/val-string-true"* ]] || return 1
+    [[ "$output" != *"CLEAN:$ext_root/val-false"* ]] || return 1
 }
 
 @test "clean_code_editors includes CodeBuddy Extension caches when directory exists" {

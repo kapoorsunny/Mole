@@ -1841,7 +1841,10 @@ EOF
     [[ "$output" == *"$HOME/Library/Caches/Homebrew/downloads/*|Homebrew cache"* ]] || return 1
     [[ "$output" != *"$HOME/Library/Caches/Homebrew/*|Homebrew cache"* ]] || return 1
     [[ "$output" != *"Library/Caches/Homebrew/api"* ]] || return 1
-    [[ "$output" != *"Library/Caches/Homebrew/bootsnap"* ]]
+    [[ "$output" != *"Library/Caches/Homebrew/bootsnap"* ]] || return 1
+    # Every file under Homebrew's lock directory is zero bytes, so sweeping it
+    # reclaims nothing and only breaks a concurrent `brew fetch` (#1594).
+    [[ "$output" != *"homebrew/locks"* ]]
 }
 
 @test "clean_dev_misc protects Claude Code and OpenCode recovery state" {
