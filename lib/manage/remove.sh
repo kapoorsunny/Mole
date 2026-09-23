@@ -9,64 +9,29 @@ if [[ -n "${MOLE_MANAGE_REMOVE_LOADED:-}" ]]; then
 fi
 readonly MOLE_MANAGE_REMOVE_LOADED=1
 
-# Where this install keeps its config, which `install.sh --config` can move.
-#
-# The launcher carries the answer: install.sh rewrites `SCRIPT_DIR=` in it to
-# the chosen directory, and the `mole` dispatcher sources this file with that
-# value in scope. update.sh already resolves it exactly this way; remove.sh
-# used to assume ~/.config/mole instead, so a relocated install had its real
-# settings left behind while the default path, if it happened to exist, was
-# trashed in their place (tw93/Mole#1589).
-#
-# A relocated directory is adopted only when it is unmistakably ours; anything
-# else falls back to the default, which is the one path that cannot belong to
-# someone else. Deciding here rather than at the sink means we never name a
-# directory we would then refuse to touch.
+# Resolve this install without using directory contents as ownership proof.
+# Source checkouts and Homebrew keep settings at the default path; install.sh
+# records the chosen config in SCRIPT_DIR, including colocated installations.
 _remove_config_dir() {
     local candidate="${MOLE_CONFIG_DIR:-${SCRIPT_DIR:-}}"
-    candidate="${candidate%/}"
-    if [[ -n "$candidate" ]] && [[ -f "$candidate/lib/core/common.sh" ]] &&
-        _remove_config_dir_is_exclusively_mole "$candidate"; then
-        printf '%s\n' "$candidate"
-        return 0
+    local launcher="${SCRIPT_PATH:-}"
+    if [[ -z "${MOLE_CONFIG_DIR:-}" ]]; then
+        if declare -f is_homebrew_install > /dev/null 2>&1 && is_homebrew_install; then
+            candidate=""
+        elif [[ "${candidate%/}" == "${launcher%/*}" &&
+            -f "$candidate/AGENTS.md" && -f "$candidate/go.mod" &&
+            ! -f "$candidate/install_channel" && ! -f "$candidate/.helper_install_incomplete" ]]; then
+            candidate=""
+        fi
     fi
-    printf '%s\n' "${HOME%/}/.config/mole"
-}
-
-# Whether every top-level entry in the config directory is one Mole put there.
-#
-# Holding Mole's own library is NOT proof the directory is Mole's to remove:
-# `--config ~/Documents` makes install.sh create lib/core/common.sh inside it,
-# and claiming ownership from that marker would trash everything beside it.
-# The default ~/.config/mole cannot be anything else, so it is exempt; any
-# other location has to earn it by containing nothing we did not install.
-_remove_config_dir_is_exclusively_mole() {
-    local config_dir="${1%/}"
-    [[ "$config_dir" != "${HOME%/}/.config/mole" ]] || return 0
-
-    local entry base
-    for entry in "$config_dir"/* "$config_dir"/.*; do
-        [[ -e "$entry" || -L "$entry" ]] || continue
-        base="${entry##*/}"
-        case "$base" in
-            # Installed by install.sh.
-            . | .. | bin | lib | README.md | LICENSE | install.sh | install_channel) ;;
-            # Runtime state Mole itself writes.
-            .helper_install_incomplete | whitelist | whitelist_checks) ;;
-            whitelist_optimize | purge_paths) ;;
-            # A staging file from an interrupted install or update.
-            install_channel.* | .*-go.*) ;;
-            *) return 1 ;;
-        esac
-    done
-    return 0
+    candidate="${candidate:-${HOME%/}/.config/mole}"
+    printf '%s\n' "${candidate%/}"
 }
 
 # Remove flow (Homebrew + manual + config/cache).
 remove_mole() {
     local dry_run_mode="${1:-false}"
     local remove_config_dir
-    remove_config_dir="$(_remove_config_dir)"
     local test_mode=false
     if [[ "${MOLE_TEST_MODE:-0}" == "1" ]]; then
         test_mode=true
@@ -170,6 +135,8 @@ remove_mole() {
 
     printf '\n'
 
+    remove_config_dir="$(_remove_config_dir)"
+
     local manual_count=${#manual_installs[@]}
     local alias_count=${#alias_installs[@]}
     if [[ "$is_homebrew" == "false" && ${manual_count:-0} -eq 0 && ${alias_count:-0} -eq 0 ]]; then
@@ -196,7 +163,13 @@ remove_mole() {
             done
         fi
         [[ -d "$HOME/.cache/mole" ]] && echo -e "  ${GRAY}${ICON_LIST} Would remove: $HOME/.cache/mole${NC}"
-        [[ -d "$remove_config_dir" ]] && echo -e "  ${GRAY}${ICON_LIST} Would move to Trash: $remove_config_dir${NC}"
+        if [[ -d "$remove_config_dir" ]]; then
+            if [[ "$remove_config_dir" == "${HOME%/}/.config/mole" ]]; then
+                echo -e "  ${GRAY}${ICON_LIST} Would move to Trash: $remove_config_dir${NC}"
+            else
+                echo "  ${ICON_LIST} $remove_config_dir (kept for manual review)"
+            fi
+        fi
         [[ -d "$HOME/Library/Logs/mole" ]] && echo -e "  ${GRAY}${ICON_LIST} Would remove: $HOME/Library/Logs/mole${NC}"
 
         printf '\n%s\n\n' "${GREEN}${ICON_SUCCESS}${NC} Dry run complete, no changes made"
@@ -210,9 +183,11 @@ remove_mole() {
     for install in ${manual_installs[@]+"${manual_installs[@]}"} ${alias_installs[@]+"${alias_installs[@]}"}; do
         echo "  ${ICON_LIST} $install"
     done
-    local remove_config_display="$remove_config_dir"
-    [[ "$remove_config_display" == "$HOME/"* ]] && remove_config_display="~${remove_config_display#"$HOME"}"
-    echo "  ${ICON_LIST} $remove_config_display (to Trash)"
+    if [[ "$remove_config_dir" == "${HOME%/}/.config/mole" ]]; then
+        echo "  ${ICON_LIST} ~/.config/mole (to Trash)"
+    elif [[ -d "$remove_config_dir" ]]; then
+        echo "  ${ICON_LIST} $remove_config_dir (kept for manual review)"
+    fi
     echo "  ${ICON_LIST} ~/.cache/mole"
     echo "  ${ICON_LIST} ~/Library/Logs/mole"
     echo -ne "${PURPLE}${ICON_ARROW}${NC} Press ${GREEN}Enter${NC} to confirm, ${GRAY}ESC${NC} to cancel: "
@@ -284,7 +259,10 @@ remove_mole() {
     if [[ -d "$HOME/.cache/mole" ]]; then
         rm -rf "$HOME/.cache/mole" 2> /dev/null || true # SAFE: hardcoded Mole-owned dir, -d guarded
     fi
-    if [[ -d "$remove_config_dir" ]]; then
+    # --config can merge into a shared tree such as ~/.local. Neither known
+    # top-level names nor a recursive filename inventory proves ownership.
+    # Only the reserved default config root can be moved as a whole.
+    if [[ "$remove_config_dir" == "${HOME%/}/.config/mole" && -d "$remove_config_dir" ]]; then
         # The config dir holds user-authored state (whitelist, purge config),
         # which is the one thing here a reinstall cannot rebuild. Move it to
         # Trash so it stays recoverable (#1346); cache and logs around it are

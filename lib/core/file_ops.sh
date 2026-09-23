@@ -399,6 +399,13 @@ _mole_regex_escape() {
 #      34 of 59 idle caches were called busy; the plain-substring shapes it
 #      relied on also read "default" out of syncdefaultsd and "data" out of
 #      dataaccessd.
+#
+# Shape 2 cannot tell sibling channels apart: every Brave Origin Nightly line
+# carries "Brave" and "Nightly", so com.brave.Browser.nightly stayed busy for
+# as long as the other channel ran, and its cache directory (610 MB of
+# abandoned Sparkle downloads on one machine) was never reclaimed. A line whose
+# executable lives in an app bundle is therefore attributed by that bundle's
+# identifier (_mole_process_line_belongs_to_other_app) before its tokens count.
 _mole_user_cache_owner_process_state() {
     local owner="$1"
     [[ -n "$owner" ]] || return 2
@@ -461,15 +468,111 @@ _mole_user_cache_owner_process_state() {
             local leaf_lines=""
             leaf_lines=$(LC_ALL=C grep -iE -- \
                 "${boundary_open}${escaped_leaf}${boundary_close}" <<< "$table") || leaf_lines=""
-            if [[ -n "$leaf_lines" ]] && LC_ALL=C grep -qiE -- \
-                "${boundary_open}(${alternation})${boundary_close}" <<< "$leaf_lines"; then
-                state=0
+            local corroborated_lines=""
+            if [[ -n "$leaf_lines" ]]; then
+                corroborated_lines=$(LC_ALL=C grep -iE -- \
+                    "${boundary_open}(${alternation})${boundary_close}" <<< "$leaf_lines") || corroborated_lines=""
             fi
+            local line
+            while IFS= read -r line; do
+                [[ -n "$line" ]] || continue
+                if _mole_process_line_belongs_to_other_app "$line" "$owner" "$leaf"; then
+                    continue
+                fi
+                state=0
+                break
+            done <<< "$corroborated_lines"
         fi
     fi
 
     _MOLE_USER_CACHE_OWNER_STATE_CACHE="${_MOLE_USER_CACHE_OWNER_STATE_CACHE-}${cache_token}${state}|"
     return "$state"
+}
+
+# CFBundleIdentifier of an app bundle into _MOLE_APP_BUNDLE_ID, memoized for
+# the process (bundles do not change identity while a clean runs). Status 1
+# when the plist cannot be read; the miss is memoized too.
+_MOLE_APP_BUNDLE_ID_CACHE=""
+_MOLE_APP_BUNDLE_ID=""
+_mole_app_bundle_identifier() {
+    local bundle="$1"
+    local cache_token="|${bundle}="
+    _MOLE_APP_BUNDLE_ID=""
+    case "${_MOLE_APP_BUNDLE_ID_CACHE:-}" in
+        *"$cache_token"*)
+            local rest="${_MOLE_APP_BUNDLE_ID_CACHE#*"$cache_token"}"
+            _MOLE_APP_BUNDLE_ID="${rest%%|*}"
+            [[ -n "$_MOLE_APP_BUNDLE_ID" ]]
+            return
+            ;;
+    esac
+    local id=""
+    id=$(plutil -extract CFBundleIdentifier raw -o - "$bundle/Contents/Info.plist" 2> /dev/null) || id=""
+    mole_is_reverse_dns_bundle_id "$id" || id=""
+    _MOLE_APP_BUNDLE_ID_CACHE="${_MOLE_APP_BUNDLE_ID_CACHE-}${cache_token}${id}|"
+    _MOLE_APP_BUNDLE_ID="$id"
+    [[ -n "$id" ]]
+}
+
+# A corroborated shape-2 process line whose executable lives in an app bundle
+# below /Applications or ~/Applications is attributed by that bundle's id.
+# Inspect only the leading executable path, removing a truncated comm only
+# when argv repeats its prefix. Never search later arguments for an app.
+# 0 = the line belongs to a different app, so it says nothing about the owner.
+# 1 = the line may be the owner's and its tokens count:
+#   - the bundle's identifier is the owner's, or the two extend each other at a
+#     label boundary (a settings or helper app inside the owner's bundle);
+#   - the executable itself is named after the owner's last label, which is
+#     how a helper with its own cache directory runs inside another vendor's
+#     bundle (AcCoreConsole inside Autodesk Fusion, #1390);
+#   - the identifier cannot be read, or no such bundle path is on the line.
+_mole_process_line_belongs_to_other_app() {
+    local line="$1" owner="$2" leaf="$3"
+    local field root head tail bundle=""
+    # ps can prefix argv with a truncated 16-byte comm. Remove it only when
+    # argv repeats that exact path prefix; otherwise keep uncertain lines busy.
+    line="${line#"${line%%[![:space:]]*}"}"
+    local comm_prefix="${line:0:16}"
+    local arguments="${line:16}"
+    arguments="${arguments#"${arguments%%[![:space:]]*}"}"
+    if [[ "$comm_prefix" == /* && "$arguments" == "$comm_prefix"* ]]; then
+        line="$arguments"
+    fi
+    field="$line"
+    for root in /Applications "$HOME/Applications"; do
+        [[ "$field" == "$root/"* ]] || continue
+        head=""
+        tail="$field"
+        while [[ "$tail" == *.app/* ]]; do
+            head="${head}${tail%%.app/*}.app"
+            tail="${tail#*.app/}"
+            # Crossing into another absolute argument cannot identify argv[0].
+            [[ "$head" != *" /"* ]] || return 1
+            if [[ -d "$head" ]]; then
+                bundle="$head"
+                break 2
+            fi
+            head="${head}/"
+        done
+    done
+    [[ -n "$bundle" ]] || return 1
+    _mole_app_bundle_identifier "$bundle" || return 1
+    local id="$_MOLE_APP_BUNDLE_ID"
+
+    local restore_nocasematch=false
+    if ! shopt -q nocasematch; then
+        shopt -s nocasematch
+        restore_nocasematch=true
+    fi
+    # Labels are [-A-Za-z0-9], so the leaf needs no escaping inside the regex.
+    local executable_pattern="/${leaf}([[:space:]]|\$)"
+    local other_app=true
+    if [[ "$id" == "$owner" || "$id" == "$owner".* || "$owner" == "$id".* ||
+        "$line" =~ $executable_pattern ]]; then
+        other_app=false
+    fi
+    [[ "$restore_nocasematch" == "true" ]] && shopt -u nocasematch
+    [[ "$other_app" == "true" ]]
 }
 
 # Is the database family live? 0 = in use, 1 = idle, 2 = could not tell.
@@ -497,7 +600,16 @@ _mole_sqlite_database_in_use() {
     # empty array is an unbound-variable error under set -u.
     [[ ${#family[@]} -gt 0 ]] || return 1
 
-    _mole_paths_have_open_handle "${family[@]}"
+    local handle_rc=0
+    _mole_paths_have_open_handle "${family[@]}" || handle_rc=$?
+    if [[ $handle_rc -eq 124 ]]; then
+        # A read-only handle probe that timed out proves neither idle nor live.
+        # Keep this family without cancelling unrelated cleanup (#1595).
+        # Signals and deletion timeouts retain their cancellation semantics.
+        debug_log "SQLite handle probe timed out, keeping database: $path"
+        return 2
+    fi
+    return "$handle_rc"
 }
 
 _mole_user_cache_sqlite_has_open_handle() {

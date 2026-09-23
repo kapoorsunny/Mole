@@ -628,7 +628,7 @@ EOF
     rm -rf "$scan_home"
     mkdir -p "$scan_home"
 
-    run env HOME="$scan_home" PROJECT_ROOT="$PROJECT_ROOT" MOLE_TEST_MODE=1 /bin/bash --noprofile --norc <<'EOF'
+    run env HOME="$scan_home" PROJECT_ROOT="$PROJECT_ROOT" MOLE_TEST_MODE=1 MO_DEBUG=1 /bin/bash --noprofile --norc <<'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/apps.sh"
@@ -674,7 +674,12 @@ printf 'ERREXIT_SCAN_FAILURE_CLOSED\n'
 EOF
 
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Skipped: Unable to scan installed applications (Broken.app)"* ]] || return 1
+    # The full path, home shortened, is what lets the user find a bundle that
+    # lives outside /Applications, such as a Caskroom staging copy. --debug
+    # lists every failing path, not just the first.
+    [[ "$output" == *"Skipped: Unable to scan installed applications (~/Applications/Broken.app)"* ]] || return 1
+    [[ "$output" != *"(Broken.app)"* ]] || return 1
+    [[ "$output" == *"Unreadable application bundle: $scan_home/Applications/Broken.app"* ]] || return 1
     [[ "$output" == *"ERREXIT_SCAN_FAILURE_CLOSED"* ]]
 }
 

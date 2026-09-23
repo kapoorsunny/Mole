@@ -371,12 +371,20 @@ scan_installed_apps() {
     fi
     if [[ $app_scan_failed -ne 0 ]]; then
         # Surface the first unreadable bundle so the skip message is actionable
-        # without --debug. Workers append before exiting nonzero.
+        # without --debug. Workers append before exiting nonzero. The full
+        # path is what makes it actionable: a Caskroom staging copy or a
+        # bundle under another scan root cannot be found from its name alone,
+        # and /Applications is where a bare basename sends the user.
         MOLE_APP_SCAN_FAILURE_DETAIL=""
         if [[ -s "$scan_tmp_dir/scan_failures.list" ]]; then
             local raw_failure_detail=""
             raw_failure_detail=$(head -1 "$scan_tmp_dir/scan_failures.list")
-            MOLE_APP_SCAN_FAILURE_DETAIL=$(mole_terminal_safe_text "${raw_failure_detail##*/}")
+            MOLE_APP_SCAN_FAILURE_DETAIL=$(mole_terminal_safe_text "${raw_failure_detail/#$HOME/~}")
+            local failed_bundle_path=""
+            while IFS= read -r failed_bundle_path; do
+                [[ -n "$failed_bundle_path" ]] || continue
+                debug_log "Unreadable application bundle: $(mole_terminal_safe_text "$failed_bundle_path")"
+            done < "$scan_tmp_dir/scan_failures.list"
         fi
         debug_log "Failed to scan one or more installed application directories"
         return 1

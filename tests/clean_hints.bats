@@ -122,12 +122,15 @@ probe_project_artifact_hints() {
     PROJECT_ARTIFACT_HINT_ESTIMATE_PARTIAL=false
 }
 bytes_to_human() { echo "20KB"; }
-note_activity() { :; }
+TRACK_SECTION=1
+SECTION_ACTIVITY=0
 show_project_artifact_hint_notice
+printf "ACTIVITY:%s\n" "$SECTION_ACTIVITY"
 EOTFLOOR
 
     [ "$status" -eq 0 ]
     [[ "$output" != *"Build artifacts"* ]] || return 1
+    [[ "$output" == *"ACTIVITY:0"* ]] || return 1
 }
 
 @test "show_project_artifact_hint_notice still reports a measurement above the floor" {

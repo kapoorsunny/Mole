@@ -2786,78 +2786,73 @@ EOF
     [ -f "$HOME/.Trash/mole-config/whitelist" ] || return 1
 }
 
-@test "remove_mole trashes the relocated config directory, not the default (#1589)" {
-    # `install.sh --config` moves the whole tree, and update.sh already follows
-    # it through SCRIPT_DIR. remove.sh assumed ~/.config/mole, so a relocated
-    # install kept its real settings and lost whatever sat at the default path.
-    # setup() clears $HOME/* but not dotfiles, so a previous test's Trash
-    # would push this move to mole-config-1 and the assertion would read
-    # the earlier run's file.
-    rm -rf "$HOME/.Trash"
-    mkdir -p "$HOME/.local/bin"
-    touch "$HOME/.local/bin/mole"
-    touch "$HOME/.local/bin/mo"
-    local relocated="$HOME/Library/Application Support/mole"
-    mkdir -p "$relocated/lib/core" "$relocated/bin"
-    touch "$relocated/lib/core/common.sh" "$relocated/install_channel"
-    echo "relocated-entry" > "$relocated/whitelist"
-    mkdir -p "$HOME/.config/mole" "$HOME/.cache/mole" "$HOME/Library/Logs/mole"
-    echo "stale-default" > "$HOME/.config/mole/whitelist"
+@test "remove_mole preserves custom config and unrelated default settings (#1589)" {
+    local iso="$HOME/custom-remove"
+    mkdir -p "$iso/.local/bin" "$iso/.local/lib/core" "$iso/.local/lib/python3"
+    mkdir -p "$iso/.config/mole"
+    touch "$iso/.local/bin/mole" "$iso/.local/bin/mo"
+    touch "$iso/.local/lib/core/common.sh" "$iso/.local/install_channel"
+    echo foreign > "$iso/.local/bin/other-tool"
+    echo foreign > "$iso/.local/lib/python3/user-data"
+    echo custom > "$iso/.local/whitelist"
+    echo default > "$iso/.config/mole/whitelist"
 
-    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" PATH="/usr/bin:/bin" MOLE_TEST_MODE=1 \
-        MOLE_CONFIG_DIR="$relocated" /bin/bash --noprofile --norc << 'EOF'
+    run env HOME="$iso" PROJECT_ROOT="$PROJECT_ROOT" PATH="/usr/bin:/bin" MOLE_TEST_MODE=1 \
+        MOLE_CONFIG_DIR="$iso/.local" /bin/bash --noprofile --norc << 'EOF'
 set -euo pipefail
-start_inline_spinner() { :; }
-stop_inline_spinner() { :; }
-sudo() { return 0; }
-export -f start_inline_spinner stop_inline_spinner sudo
 printf '\n' | "$PROJECT_ROOT/mole" remove
 EOF
 
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
-    [ -f "$HOME/.Trash/mole-config/whitelist" ] || return 1
-    grep -q relocated-entry "$HOME/.Trash/mole-config/whitelist" || return 1
-    [ ! -d "$relocated" ] || return 1
-    # The default path was never this install's; leave it where it is.
-    [ -f "$HOME/.config/mole/whitelist" ] || return 1
+    [ -f "$iso/.local/bin/other-tool" ] || return 1
+    [ -f "$iso/.local/lib/python3/user-data" ] || return 1
+    [ -f "$iso/.local/whitelist" ] || return 1
+    [ -f "$iso/.config/mole/whitelist" ] || return 1
+    [ ! -e "$iso/.local/bin/mole" ] || return 1
+    [[ "$output" == *"$iso/.local (kept for manual review)"* ]]
 }
 
-@test "remove_mole never adopts a config directory holding foreign files (#1589)" {
-    # --config takes any path, and install.sh creates lib/core/common.sh inside
-    # it. Treating that file as proof of ownership would trash everything
-    # beside it, which is how #1446 lost an entire ~/.local.
-    # setup() clears $HOME/* but not dotfiles, so a previous test's Trash
-    # would push this move to mole-config-1 and the assertion would read
-    # the earlier run's file.
-    rm -rf "$HOME/.Trash"
-    mkdir -p "$HOME/.local/bin"
-    touch "$HOME/.local/bin/mole"
-    touch "$HOME/.local/bin/mo"
-    local shared="$HOME/Documents"
-    mkdir -p "$shared/lib/core" "$shared/bin"
-    touch "$shared/lib/core/common.sh" "$shared/install_channel"
-    mkdir -p "$shared/taxes-2025"
-    echo "not mine" > "$shared/notes.txt"
-    mkdir -p "$HOME/.config/mole" "$HOME/.cache/mole" "$HOME/Library/Logs/mole"
-    echo "real-settings" > "$HOME/.config/mole/whitelist"
+@test "remove_mole custom config preview never promises a whole-directory move (#1589)" {
+    local iso="$HOME/custom-preview"
+    local custom="$iso/Library/Application Support/mole"
+    mkdir -p "$iso/.local/bin" "$custom/lib/core" "$iso/.config/mole"
+    touch "$iso/.local/bin/mole" "$custom/lib/core/common.sh"
+    echo custom > "$custom/whitelist"
+    echo default > "$iso/.config/mole/whitelist"
 
-    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" PATH="/usr/bin:/bin" MOLE_TEST_MODE=1 \
-        MOLE_CONFIG_DIR="$shared" /bin/bash --noprofile --norc << 'EOF'
-set -euo pipefail
-start_inline_spinner() { :; }
-stop_inline_spinner() { :; }
-sudo() { return 0; }
-export -f start_inline_spinner stop_inline_spinner sudo
-printf '\n' | "$PROJECT_ROOT/mole" remove
-EOF
+    run env HOME="$iso" PROJECT_ROOT="$PROJECT_ROOT" PATH="/usr/bin:/bin" MOLE_TEST_MODE=1 \
+        MOLE_CONFIG_DIR="$custom" /bin/bash "$PROJECT_ROOT/mole" remove --dry-run
 
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
-    # Everything the user owns stays exactly where it was.
-    [ -f "$shared/notes.txt" ] || return 1
-    [ -d "$shared/taxes-2025" ] || return 1
-    [ ! -e "$HOME/.Trash/mole-config/notes.txt" ] || return 1
-    # Removal falls back to the one path that can only be Mole's.
-    [ -f "$HOME/.Trash/mole-config/whitelist" ] || return 1
+    [[ "$output" == *"$custom (kept for manual review)"* ]] || return 1
+    [[ "$output" != *"Would move to Trash:"* ]] || return 1
+    [ -f "$iso/.local/bin/mole" ] || return 1
+    [ -f "$custom/whitelist" ] || return 1
+    [ -f "$iso/.config/mole/whitelist" ]
+}
+
+@test "remove config resolution distinguishes pinned installs from source and Homebrew" {
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/manage/remove.sh"
+is_homebrew_install() { return 1; }
+unset MOLE_CONFIG_DIR
+SCRIPT_PATH="$PROJECT_ROOT/mole"
+SCRIPT_DIR="$PROJECT_ROOT"
+printf 'SOURCE=%s\n' "$(_remove_config_dir)"
+SCRIPT_PATH="$HOME/.local/bin/mole"
+SCRIPT_DIR="$HOME/custom-config"
+printf 'CUSTOM=%s\n' "$(_remove_config_dir)"
+SCRIPT_PATH="$HOME/custom-config/mole"
+printf 'COLOCATED=%s\n' "$(_remove_config_dir)"
+is_homebrew_install() { return 0; }
+printf 'BREW=%s\n' "$(_remove_config_dir)"
+EOF
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"SOURCE=$HOME/.config/mole"* ]] || return 1
+    [[ "$output" == *"CUSTOM=$HOME/custom-config"* ]] || return 1
+    [[ "$output" == *"COLOCATED=$HOME/custom-config"* ]] || return 1
+    [[ "$output" == *"BREW=$HOME/.config/mole"* ]]
 }
 
 @test "remove_mole dry-run keeps manual binaries and caches" {

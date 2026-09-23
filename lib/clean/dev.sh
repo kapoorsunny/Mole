@@ -4761,48 +4761,6 @@ clean_codex_runtimes() {
         return 0
     fi
 
-    # Size what this run LEAVES, not the whole root. The header used to measure
-    # `$runtime_root`, which still contains the stale directories the loop below
-    # is about to delete, so the number counted bytes that were gone by the time
-    # the user read it: 1.68GB announced on a root where 140MB was cleaned in
-    # the same pass (measured 2026-09-20). Everything the loop keeps is in
-    # scope, whitelisted and active runtimes included, because those are exactly
-    # what stays on disk afterwards; only the entries this run removes drop out.
-    local -a review_dirs=()
-    while IFS= read -r -d '' runtime_dir; do
-        if declare -f is_path_whitelisted > /dev/null 2>&1 && is_path_whitelisted "$runtime_dir"; then
-            review_dirs+=("$runtime_dir")
-            continue
-        fi
-        if is_codex_runtime_active "$runtime_dir" || ! is_codex_runtime_stale "$runtime_dir"; then
-            review_dirs+=("$runtime_dir")
-        fi
-    done < <(command find "$runtime_root" -mindepth 1 -maxdepth 1 -type d -print0 2> /dev/null)
-
-    if [[ ${#review_dirs[@]} -gt 0 ]]; then
-        local review_kb=0
-        local review_dir
-        for review_dir in "${review_dirs[@]}"; do
-            local entry_kb=0
-            if declare -f get_path_size_kb > /dev/null 2>&1; then
-                local size_rc=0
-                entry_kb=$(get_path_size_kb "$review_dir" 2> /dev/null) || size_rc=$?
-                if [[ $size_rc -ne 0 ]]; then
-                    _mole_record_clean_cancellation "$size_rc"
-                    return "$size_rc"
-                fi
-            fi
-            [[ "$entry_kb" =~ ^[0-9]+$ ]] || entry_kb=0
-            review_kb=$((review_kb + entry_kb))
-        done
-        local size_human="${review_kb} KB"
-        if declare -f bytes_to_human > /dev/null 2>&1; then
-            size_human=$(bytes_to_human "$((review_kb * 1024))")
-        fi
-        echo -e "  ${GRAY}${ICON_REVIEW}${NC} Codex runtimes · manual review (${size_human})"
-        note_activity
-    fi
-
     while IFS= read -r -d '' runtime_dir; do
         if declare -f is_path_whitelisted > /dev/null 2>&1 && is_path_whitelisted "$runtime_dir"; then
             if [[ "${DRY_RUN:-false}" == "true" ]]; then
@@ -4821,11 +4779,36 @@ clean_codex_runtimes() {
         fi
 
         if is_codex_runtime_stale "$runtime_dir"; then
-            _codex_runtime_safe_clean_guarded "$runtime_dir" || return 0
+            local cleanup_rc=0
+            _codex_runtime_safe_clean_guarded "$runtime_dir" || cleanup_rc=$?
+            if [[ $cleanup_rc -eq 124 || $cleanup_rc -ge 128 ]]; then
+                _mole_record_clean_cancellation "$cleanup_rc"
+                return "$cleanup_rc"
+            elif [[ $cleanup_rc -ne 0 ]]; then
+                break
+            fi
         else
             debug_log "Codex runtime left for manual review: $runtime_dir"
         fi
     done < <(command find "$runtime_root" -mindepth 1 -maxdepth 1 -type d -print0 2> /dev/null)
+
+    # A successful safe_clean may still keep a protected or unwritable target.
+    # Measure after cleanup so the review includes every actual survivor.
+    [[ -n "$(command find "$runtime_root" -mindepth 1 -maxdepth 1 -print -quit 2> /dev/null)" ]] || return 0
+    local review_size=""
+    if [[ "${DRY_RUN:-false}" != "true" && "${MOLE_DRY_RUN:-0}" != "1" ]]; then
+        local review_kb=0 size_rc=0
+        review_kb=$(get_path_size_kb "$runtime_root" 2> /dev/null) || size_rc=$?
+        if [[ $size_rc -ne 0 ]]; then
+            _mole_record_clean_cancellation "$size_rc"
+            return "$size_rc"
+        fi
+        [[ "$review_kb" =~ ^[0-9]+$ ]] || review_kb=0
+        review_size=" ($(bytes_to_human "$((review_kb * 1024))"))"
+    fi
+    # A preview cannot establish which removals will succeed, so omit its size.
+    echo -e "  ${GRAY}${ICON_REVIEW}${NC} Codex runtimes · manual review${review_size}"
+    note_activity
 }
 
 # Codex CLI and Desktop share state under ~/.codex. Keep it out of default

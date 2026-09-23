@@ -411,8 +411,6 @@ show_project_artifact_hint_notice() {
         return 0
     fi
 
-    note_activity
-
     local hint_count_label="$PROJECT_ARTIFACT_HINT_COUNT"
     [[ "$PROJECT_ARTIFACT_HINT_TRUNCATED" == "true" ]] && hint_count_label="${hint_count_label}+"
 
@@ -464,6 +462,7 @@ show_project_artifact_hint_notice() {
         partial_note=" ${GRAY}(partial scan)${NC}"
     fi
 
+    note_activity
     echo -e "  ${YELLOW}${ICON_REVIEW}${NC} Build artifacts · ${GREEN}${detail}${NC} · ${GRAY}${review_command}${NC}${partial_note}"
 }
 

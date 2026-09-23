@@ -1247,37 +1247,123 @@ EOF
 }
 
 @test "clean_codex_runtimes sizes manual review by what survives the run" {
-    mkdir -p "$HOME/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin"
-    touch "$HOME/.cache/codex-runtimes/codex-primary-runtime/runtime.json"
-    touch "$HOME/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node"
-    mkdir -p "$HOME/.cache/codex-runtimes/incomplete-old"
-
-    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" DRY_RUN=false /bin/bash --noprofile --norc << 'EOF'
+    local iso="$HOME/iso-runtime-survivors"
+    run env HOME="$iso" PROJECT_ROOT="$PROJECT_ROOT" DRY_RUN=false /bin/bash --noprofile --norc << 'EOF'
 set -euo pipefail
+mkdir -p "$HOME/.cache/codex-runtimes/codex-primary-runtime/dependencies/node"
+touch "$HOME/.cache/codex-runtimes/codex-primary-runtime/runtime.json"
+mkdir -p "$HOME/.cache/codex-runtimes/incomplete-old"
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/dev.sh"
-safe_clean() { echo "SAFE_CLEAN:$2|$1"; }
+safe_clean() { echo "SAFE_CLEAN:$2|$1"; rmdir "$1"; }
 pgrep() { return 1; }
 is_path_whitelisted() { return 1; }
 get_path_size_kb() {
     case "$1" in
         */codex-primary-runtime) echo 1024 ;;
         */incomplete-old) echo 4096 ;;
-        *) echo 999999 ;;
+        */codex-runtimes)
+            if [[ -d "$1/incomplete-old" ]]; then echo 5120; else echo 1024; fi ;;
+        *) return 1 ;;
     esac
 }
 bytes_to_human() { echo "$(($1 / 1024))KB"; }
 note_activity() { :; }
 clean_codex_runtimes
+[[ ! -d "$HOME/.cache/codex-runtimes/incomplete-old" ]]
 EOF
 
-    [ "$status" -eq 0 ]
-    # The stale directory is removed by this very run, so its bytes must not be
-    # announced as something the user still has to look at.
+    [ "$status" -eq 0 ] || return 1
     [[ "$output" == *"SAFE_CLEAN:"*"incomplete-old"* ]] || return 1
     [[ "$output" == *"Codex runtimes · manual review (1024KB)"* ]] || return 1
     [[ "$output" != *"5120KB"* ]] || return 1
-    [[ "$output" != *"999999KB"* ]] || return 1
+}
+
+@test "clean_codex_runtimes includes stale directories kept by the cleanup sink" {
+    local iso="$HOME/iso-runtime-refused"
+    run env HOME="$iso" PROJECT_ROOT="$PROJECT_ROOT" DRY_RUN=false /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+mkdir -p "$HOME/.cache/codex-runtimes/active/dependencies/node"
+touch "$HOME/.cache/codex-runtimes/active/runtime.json"
+mkdir -p "$HOME/.cache/codex-runtimes/incomplete-old"
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/dev.sh"
+# The real safe_clean contract returns zero when a target is kept after a
+# permission failure or an eligibility filter. A success code is not removal.
+safe_clean() { echo "KEPT:$1"; }
+pgrep() { return 1; }
+is_path_whitelisted() { return 1; }
+get_path_size_kb() {
+    case "$1" in
+        */active) echo 1024 ;;
+        */incomplete-old) echo 4096 ;;
+        */codex-runtimes) echo 5120 ;;
+        *) return 1 ;;
+    esac
+}
+bytes_to_human() { echo "$(($1 / 1024))KB"; }
+note_activity() { :; }
+clean_codex_runtimes
+[[ -d "$HOME/.cache/codex-runtimes/incomplete-old" ]]
+EOF
+
+    [ "$status" -eq 0 ] || return 1
+    [[ "$output" == *"KEPT:"*"incomplete-old"* ]] || return 1
+    [[ "$output" == *"Codex runtimes · manual review (5120KB)"* ]] || return 1
+}
+
+@test "clean_codex_runtimes dry-run does not predict retained bytes" {
+    local iso="$HOME/iso-runtime-preview"
+    run env HOME="$iso" PROJECT_ROOT="$PROJECT_ROOT" DRY_RUN=true /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+mkdir -p "$HOME/.cache/codex-runtimes/active/dependencies/node"
+touch "$HOME/.cache/codex-runtimes/active/runtime.json"
+mkdir -p "$HOME/.cache/codex-runtimes/incomplete-old"
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/dev.sh"
+safe_clean() { echo "PREVIEW:$1"; }
+pgrep() { return 1; }
+is_path_whitelisted() { return 1; }
+get_path_size_kb() { echo 1024; }
+bytes_to_human() { echo "1MB"; }
+note_activity() { :; }
+clean_codex_runtimes
+[[ -d "$HOME/.cache/codex-runtimes/incomplete-old" ]]
+EOF
+
+    [ "$status" -eq 0 ] || return 1
+    [[ "$output" == *"PREVIEW:"*"incomplete-old"* ]] || return 1
+    [[ "$output" == *"Codex runtimes · manual review"* ]] || return 1
+    [[ "$output" != *"manual review ("* ]] || return 1
+}
+
+@test "clean_codex_runtimes stops before survivor sizing when cleanup is cancelled" {
+    local iso="$HOME/iso-runtime-cancel"
+    local cancel_rc
+    for cancel_rc in 124 130; do
+        run env HOME="$iso" PROJECT_ROOT="$PROJECT_ROOT" CANCEL_RC="$cancel_rc" DRY_RUN=false /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+mkdir -p "$HOME/.cache/codex-runtimes/incomplete-first" "$HOME/.cache/codex-runtimes/incomplete-second"
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/dev.sh"
+pgrep() { return 1; }
+is_path_whitelisted() { return 1; }
+get_path_size_kb() { echo UNEXPECTED_SIZE; }
+guard_calls=0
+_codex_runtime_safe_clean_guarded() {
+    guard_calls=$((guard_calls + 1))
+    echo "GUARD:$guard_calls"
+    return "$CANCEL_RC"
+}
+clean_codex_runtimes
+EOF
+
+        [ "$status" -eq "$cancel_rc" ] || return 1
+        [[ "$output" == *"GUARD:1"* ]] || return 1
+        [[ "$output" != *"GUARD:2"* ]] || return 1
+        [[ "$output" != *"UNEXPECTED_SIZE"* ]] || return 1
+        [[ "$output" != *"manual review"* ]] || return 1
+    done
 }
 
 @test "clean_codex_runtimes cleans only stale incomplete runtime dirs" {

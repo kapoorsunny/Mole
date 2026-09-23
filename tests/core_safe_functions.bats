@@ -338,7 +338,7 @@ printf 'RC=%s\n' "$validation_rc"
 EOF
 
     [ "$status" -eq 0 ] || return 1
-    [[ "$output" == *"RC=124"* ]]
+    [[ "$output" == "RC=1" ]]
 }
 
 @test "validate_path_for_deletion checks every supported SQLite name inside a cache directory (#1439)" {
@@ -3117,6 +3117,93 @@ EOF
 	[[ "$output" == *"HELPER=0"* ]]
 }
 
+# Shape 2 reads every "Brave Origin Nightly" line as com.brave.Browser.nightly:
+# same vendor, same last label, different app, so one channel kept the other's
+# cache busy for as long as it ran. A line whose executable lives in an app
+# bundle, at any depth below an application root, is attributed by that
+# bundle's identifier instead, taken from the first field in line order. The
+# owner's own bundle (even when a later argument names another app), a nested
+# app that extends the owner's id, an executable named after the label (the
+# AcCoreConsole shape) and an unreadable bundle all still count. The comm
+# column is the 16-byte kernel name, as ps prints it.
+@test "cache owner probe attributes an app bundle's lines by its identifier" {
+    local apps="$HOME/Applications"
+    local name id
+    while IFS='|' read -r name id; do
+        mkdir -p "$apps/$name/Contents/MacOS"
+        [[ -z "$id" ]] || /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string $id" \
+            "$apps/$name/Contents/Info.plist" > /dev/null
+    done <<'APPS'
+Brave Browser Nightly.app|com.brave.Browser.nightly
+Browsers/Brave Origin Nightly.app|com.brave.Browser.origin.nightly
+Karabiner-Elements.app|org.pqrs.Karabiner-Elements
+Autodesk Fusion.app|com.autodesk.fusion360
+Broken.app|
+APPS
+    # Any readable bundle under /Applications stands in for an unrelated app
+    # that a later argument can name.
+    local installed="" candidate
+    for candidate in /Applications/*.app; do
+        plutil -extract CFBundleIdentifier raw -o - "$candidate/Contents/Info.plist" > /dev/null 2>&1 || continue
+        installed="$candidate"
+        break
+    done
+    [[ -n "$installed" ]] || skip "no readable app bundle under /Applications"
+    local origin="$apps/Browsers/Brave Origin Nightly.app/Contents/MacOS/Brave Origin Nightly"
+    local origin_helper="$apps/Browsers/Brave Origin Nightly.app/Contents/Frameworks/Brave Origin Nightly Framework.framework/Versions/154.1.98.11/Helpers/Brave Origin Nightly Helper (Renderer).app/Contents/MacOS/Brave Origin Nightly Helper (Renderer)"
+    local nightly="$apps/Brave Browser Nightly.app/Contents/MacOS/Brave Browser Nightly"
+    local settings="$apps/Karabiner-Elements.app/Contents/Resources/Karabiner-Elements Settings.app/Contents/MacOS/Karabiner-Elements Settings"
+    local console="$apps/Autodesk Fusion.app/Contents/MacOS/AcCoreConsole"
+    local broken="$apps/Broken.app/Contents/MacOS/Brave Nightly Beta"
+    printf '  PID  PPID COMM ARGS\n  701     1 %s %s\n  702     1 %s %s --type=renderer\n' \
+        "${origin:0:16}" "$origin" "${origin_helper:0:16}" "$origin_helper" > "$HOME/table-sibling"
+    printf '  PID  PPID COMM ARGS\n  701     1 %s %s\n  703     1 %s %s\n' \
+        "${origin:0:16}" "$origin" "${nightly:0:16}" "$nightly" > "$HOME/table-owner"
+    printf '  PID  PPID COMM ARGS\n  704     1 %s %s %s/Contents/MacOS/Unrelated\n' \
+        "${nightly:0:16}" "$nightly" "$installed" > "$HOME/table-later"
+    printf '  PID  PPID COMM ARGS\n  705     1 %s %s\n' "${settings:0:16}" "$settings" > "$HOME/table-nested"
+    printf '  PID  PPID COMM ARGS\n  706     1 %s %s\n' "${console:0:16}" "$console" > "$HOME/table-helper"
+    printf '  PID  PPID COMM ARGS\n  707     1 %s %s\n' "${broken:0:16}" "$broken" > "$HOME/table-broken"
+
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/file_ops.sh"
+ps() { cat "$HOME/$TABLE"; }
+probe() {
+    local state=0
+    _mole_reset_process_snapshot
+    TABLE="$1"
+    _mole_user_cache_owner_process_state "$2" || state=$?
+    printf '%s %s=%s\n' "$1" "$2" "$state"
+}
+probe table-sibling com.brave.Browser.nightly
+probe table-sibling com.brave.Browser.origin.nightly
+probe table-owner com.brave.Browser.nightly
+probe table-later com.brave.Browser.nightly
+probe table-nested org.pqrs.Karabiner-Elements.Settings
+probe table-helper com.autodesk.AcCoreConsole
+probe table-broken com.brave.Browser.nightly
+printf '  PID PPID COMM ARGS\n  708 1 /opt/BraveNightly /opt/BraveNightly --label Brave --channel Nightly --open %s/Contents/MacOS/Other\n' "$HOME/Applications/Brave Browser Nightly.app" > "$HOME/table-outside"
+probe table-outside com.brave.Browser.origin.nightly
+printf '  PID PPID COMM ARGS\n  709 1 /Applications/Br /Applications/BraveLauncher --label Brave --channel Nightly --open %s/Contents/MacOS/Other\n' "$HOME/Applications/Brave Browser Nightly.app" > "$HOME/table-launcher"
+probe table-launcher com.brave.Browser.origin.nightly
+EOF
+
+    [ "$status" -eq 0 ] || {
+        echo "$output"
+        return 1
+    }
+    [[ "$output" == *"table-sibling com.brave.Browser.nightly=1"* ]] || return 1
+    [[ "$output" == *"table-sibling com.brave.Browser.origin.nightly=0"* ]] || return 1
+    [[ "$output" == *"table-owner com.brave.Browser.nightly=0"* ]] || return 1
+    [[ "$output" == *"table-later com.brave.Browser.nightly=0"* ]] || return 1
+    [[ "$output" == *"table-nested org.pqrs.Karabiner-Elements.Settings=0"* ]] || return 1
+    [[ "$output" == *"table-helper com.autodesk.AcCoreConsole=0"* ]] || return 1
+    [[ "$output" == *"table-outside com.brave.Browser.origin.nightly=0"* ]] || return 1
+    [[ "$output" == *"table-launcher com.brave.Browser.origin.nightly=0"* ]] || return 1
+    [[ "$output" == *"table-broken com.brave.Browser.nightly=0"* ]]
+}
+
 @test "cache owner probes reuse one process table snapshot" {
 	run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
 set -euo pipefail
@@ -3227,4 +3314,70 @@ EOF
         return 1
     }
     [[ "$output" == *"UNREADABLE=2"* ]]
+}
+
+@test "SQLite handle timeout keeps the file without cancelling later cleanup (#1595)" {
+    local database="$TEST_DIR/timeout.sqlite"
+    printf 'database' > "$database"
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" database="$database" /bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+MOLE_CURRENT_COMMAND=clean
+MOLE_CLEAN_CANCEL_STATUS=0
+_MOLE_COMPLETE_LSOF_MODE=direct
+_mole_run_complete_lsof() { return 124; }
+rc=0
+safe_remove "$database" true || rc=$?
+printf 'RC=%s CANCEL=%s EXISTS=%s\n' "$rc" "$MOLE_CLEAN_CANCEL_STATUS" "$(test -f "$database" && echo yes || echo no)"
+next="${database%.sqlite}.log"
+printf 'stale' > "$next"
+safe_remove "$next" true 0 || exit 1
+[[ ! -e "$next" ]] || exit 1
+printf 'LATER_REMOVED\n'
+EOF
+    [ "$status" -eq 0 ] || return 1
+    [[ "$output" == *"RC=1 CANCEL=0 EXISTS=yes"* ]] || return 1
+    [[ "$output" == *"LATER_REMOVED"* ]]
+}
+
+@test "SQLite handle interruption still cancels cleanup (#1595)" {
+    local database="$TEST_DIR/interrupted.sqlite"
+    printf 'database' > "$database"
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" database="$database" /bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+MOLE_CURRENT_COMMAND=clean
+MOLE_CLEAN_CANCEL_STATUS=0
+_MOLE_COMPLETE_LSOF_MODE=direct
+_mole_run_complete_lsof() { return 130; }
+rc=0
+safe_remove "$database" true || rc=$?
+printf 'RC=%s CANCEL=%s EXISTS=%s\n' "$rc" "$MOLE_CLEAN_CANCEL_STATUS" "$(test -f "$database" && echo yes || echo no)"
+EOF
+    [ "$status" -eq 0 ] || return 1
+    [[ "$output" == *"RC=130 CANCEL=130 EXISTS=yes"* ]]
+}
+
+@test "SQLite timeout after sizing keeps the file without cancellation (#1595)" {
+    local database="$TEST_DIR/final-timeout.sqlite"
+    printf 'database' > "$database"
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" database="$database" /bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+MOLE_CURRENT_COMMAND=clean
+MOLE_CLEAN_CANCEL_STATUS=0
+_MOLE_COMPLETE_LSOF_MODE=direct
+_mole_run_complete_lsof() {
+    [[ -e "${database}.sized" ]] && return 124
+    return 1
+}
+oplog_enabled() { return 0; }
+get_path_size_kb() { touch "${database}.sized"; printf '1\n'; }
+rc=0
+safe_remove "$database" true || rc=$?
+printf 'RC=%s CANCEL=%s EXISTS=%s SIZED=%s\n' "$rc" "$MOLE_CLEAN_CANCEL_STATUS" \
+    "$(test -f "$database" && echo yes || echo no)" "$(test -f "${database}.sized" && echo yes || echo no)"
+EOF
+    [ "$status" -eq 0 ] || return 1
+    [[ "$output" == *"RC=1 CANCEL=0 EXISTS=yes SIZED=yes"* ]]
 }
