@@ -245,8 +245,7 @@ append_dry_run_cleanup_target() {
 record_dry_run_cleanup_target() {
     local path="$1"
     local pending_clean_cancel="${MOLE_CLEAN_CANCEL_STATUS:-0}"
-    if [[ "${MOLE_CURRENT_COMMAND:-}" == "clean" &&
-        ("$pending_clean_cancel" -eq 124 || "$pending_clean_cancel" -ge 128) ]]; then
+    if [[ "${MOLE_CURRENT_COMMAND:-}" == "clean" ]] && mole_rc_timeout_or_signal "$pending_clean_cancel"; then
         return "$pending_clean_cancel"
     fi
     if [[ "${_MOLE_DRY_RUN_TARGET_PREVALIDATED:-false}" != "true" ]]; then
@@ -266,7 +265,7 @@ record_dry_run_cleanup_target() {
             if [[ $live_cache_state -eq 0 || $live_cache_state -eq 2 ]]; then
                 return 1
             fi
-            if [[ $live_cache_state -eq 124 || $live_cache_state -ge 128 ]]; then
+            if mole_rc_timeout_or_signal "$live_cache_state"; then
                 _mole_record_clean_cancellation "$live_cache_state"
                 return "$live_cache_state"
             fi
@@ -279,7 +278,7 @@ record_dry_run_cleanup_target() {
             if [[ $sqlite_state -eq 0 || $sqlite_state -eq 2 ]]; then
                 return 1
             fi
-            if [[ $sqlite_state -eq 124 || $sqlite_state -ge 128 ]]; then
+            if mole_rc_timeout_or_signal "$sqlite_state"; then
                 _mole_record_clean_cancellation "$sqlite_state"
                 return "$sqlite_state"
             fi
@@ -336,14 +335,14 @@ emit_deduplicated_dry_run_ledger() {
                 next if $seen{$identity}++;
                 push @records, \@record;
                 my $path = $record[5];
-                $path =~ s{/+$}{} if length($path) > 1;
+                $path =~ s{/+\z}{} if length($path) > 1;
                 $measured{$path} = 1 if $record[3] eq "true";
             }
             for my $record (@records) {
                 my $ancestor = $record->[5];
-                $ancestor =~ s{/+$}{} if length($ancestor) > 1;
+                $ancestor =~ s{/+\z}{} if length($ancestor) > 1;
                 my $covered_by = "";
-                while ($ancestor =~ s{/[^/]*$}{} && length $ancestor) {
+                while ($ancestor =~ s{/[^/]*\z}{} && length $ancestor) {
                     if ($measured{$ancestor}) {
                         $covered_by = $ancestor;
                         last;
@@ -923,8 +922,7 @@ _safe_clean_impl() {
     shift
 
     local pending_clean_cancel="${MOLE_CLEAN_CANCEL_STATUS:-0}"
-    if [[ "${MOLE_CURRENT_COMMAND:-}" == "clean" &&
-        ("$pending_clean_cancel" -eq 124 || "$pending_clean_cancel" -ge 128) ]]; then
+    if [[ "${MOLE_CURRENT_COMMAND:-}" == "clean" ]] && mole_rc_timeout_or_signal "$pending_clean_cancel"; then
         return "$pending_clean_cancel"
     fi
 
@@ -1125,7 +1123,7 @@ _safe_clean_impl() {
                 > "$bulk_stat_file" 2> /dev/null || bulk_stat_rc=$?
             if [[ $bulk_stat_rc -ge 128 ]]; then
                 cleanup_interrupt_rc=$bulk_stat_rc
-            elif [[ $bulk_stat_rc -eq 124 ]]; then
+            elif mole_rc_timeout "$bulk_stat_rc"; then
                 # The size is only used for the freed total; a stalled stat
                 # must not cancel the delete set. Sizes are already 0 here.
                 MOLE_CLEAN_SIZING_TIMEOUTS=$((${MOLE_CLEAN_SIZING_TIMEOUTS:-0} + 1))
@@ -1153,7 +1151,7 @@ _safe_clean_impl() {
                     if [[ $_dsize_rc -ge 128 ]]; then
                         cleanup_interrupt_rc=$_dsize_rc
                         break
-                    elif [[ $_dsize_rc -eq 124 ]]; then
+                    elif mole_rc_timeout "$_dsize_rc"; then
                         MOLE_CLEAN_SIZING_TIMEOUTS=$((${MOLE_CLEAN_SIZING_TIMEOUTS:-0} + 1))
                     fi
                     [[ "$_dsize" =~ ^[0-9]+$ ]] || _dsize=0
@@ -1181,7 +1179,7 @@ _safe_clean_impl() {
                         if [[ $size_rc -ge 128 ]]; then
                             exit "$size_rc"
                         fi
-                        if [[ $size_rc -eq 124 ]]; then
+                        if mole_rc_timeout "$size_rc"; then
                             # Sizing budget exhausted: keep the item in the
                             # delete set and report its size as 0.
                             size_unknown=1
@@ -1282,7 +1280,7 @@ _safe_clean_impl() {
                             _MOLE_SAFE_CLEAN_EXPECTED_PARENT_ID=""
                             _MOLE_SAFE_CLEAN_EXPECTED_TARGET_ID=""
                             "$delete_guard" "$path" || action_rc=$?
-                            if [[ $action_rc -eq 124 || $action_rc -ge 128 ]]; then
+                            if mole_rc_timeout_or_signal "$action_rc"; then
                                 cleanup_interrupt_rc=$action_rc
                                 break
                             elif [[ $action_rc -ne 0 ]]; then
@@ -1318,7 +1316,7 @@ _safe_clean_impl() {
                             _MOLE_SAFE_CLEAN_EXPECTED_PARENT_ID=""
                             _MOLE_SAFE_CLEAN_EXPECTED_TARGET_ID=""
                             "$delete_guard" "$path" || action_rc=$?
-                            if [[ $action_rc -eq 124 || $action_rc -ge 128 ]]; then
+                            if mole_rc_timeout_or_signal "$action_rc"; then
                                 cleanup_interrupt_rc=$action_rc
                                 break
                             elif [[ $action_rc -ne 0 ]]; then
@@ -1329,7 +1327,7 @@ _safe_clean_impl() {
                         action_rc=0
                         record_dry_run_cleanup_target \
                             "$path" "$size" 1 true || action_rc=$?
-                        if [[ $action_rc -eq 124 || $action_rc -ge 128 ]]; then
+                        if mole_rc_timeout_or_signal "$action_rc"; then
                             cleanup_interrupt_rc=$action_rc
                             break
                         elif [[ $action_rc -eq 0 ]]; then
@@ -1378,7 +1376,7 @@ _safe_clean_impl() {
                 if [[ $size_rc -ge 128 ]]; then
                     cleanup_interrupt_rc=$size_rc
                     break
-                elif [[ $size_rc -eq 124 ]]; then
+                elif mole_rc_timeout "$size_rc"; then
                     # Sizing budget exhausted: keep cleaning with size 0.
                     MOLE_CLEAN_SIZING_TIMEOUTS=$((${MOLE_CLEAN_SIZING_TIMEOUTS:-0} + 1))
                 fi
@@ -1393,7 +1391,7 @@ _safe_clean_impl() {
                         _MOLE_SAFE_CLEAN_EXPECTED_PARENT_ID=""
                         _MOLE_SAFE_CLEAN_EXPECTED_TARGET_ID=""
                         "$delete_guard" "$path" || action_rc=$?
-                        if [[ $action_rc -eq 124 || $action_rc -ge 128 ]]; then
+                        if mole_rc_timeout_or_signal "$action_rc"; then
                             cleanup_interrupt_rc=$action_rc
                             break
                         elif [[ $action_rc -ne 0 ]]; then
@@ -1428,7 +1426,7 @@ _safe_clean_impl() {
                         _MOLE_SAFE_CLEAN_EXPECTED_PARENT_ID=""
                         _MOLE_SAFE_CLEAN_EXPECTED_TARGET_ID=""
                         "$delete_guard" "$path" || action_rc=$?
-                        if [[ $action_rc -eq 124 || $action_rc -ge 128 ]]; then
+                        if mole_rc_timeout_or_signal "$action_rc"; then
                             cleanup_interrupt_rc=$action_rc
                             break
                         elif [[ $action_rc -ne 0 ]]; then
@@ -1439,7 +1437,7 @@ _safe_clean_impl() {
                     action_rc=0
                     record_dry_run_cleanup_target \
                         "$path" "$size_kb" 1 true || action_rc=$?
-                    if [[ $action_rc -eq 124 || $action_rc -ge 128 ]]; then
+                    if mole_rc_timeout_or_signal "$action_rc"; then
                         cleanup_interrupt_rc=$action_rc
                         break
                     elif [[ $action_rc -eq 0 ]]; then
@@ -1510,9 +1508,7 @@ _safe_clean_impl() {
             line_color=$(cleanup_result_color_kb "$total_size_kb")
             echo -e "  ${line_color}${ICON_SUCCESS}${NC} $description${NC} · ${count_note}${line_color}$size_human${NC}"
         fi
-        files_cleaned=$((files_cleaned + total_count))
-        total_size_cleaned=$((total_size_cleaned + total_size_kb))
-        total_items=$((total_items + 1))
+        mole_add_cleaned_row "$total_count" "$total_size_kb"
         note_activity
     fi
 
@@ -1763,7 +1759,7 @@ perform_cleanup() {
             shift
         fi
         local pending_clean_cancel="${MOLE_CLEAN_CANCEL_STATUS:-0}"
-        if [[ $pending_clean_cancel -eq 124 || $pending_clean_cancel -ge 128 ]]; then
+        if mole_rc_timeout_or_signal "$pending_clean_cancel"; then
             return "$pending_clean_cancel"
         fi
         local step_name="${1:-cleanup step}"
@@ -1773,12 +1769,12 @@ perform_cleanup() {
         "$@" || step_rc=$?
         debug_timer_end "cleanup step: $step_name" _perf_step_start
         pending_clean_cancel="${MOLE_CLEAN_CANCEL_STATUS:-0}"
-        if [[ $step_rc -eq 124 || $step_rc -ge 128 ]]; then
+        if mole_rc_timeout_or_signal "$step_rc"; then
             MOLE_CLEAN_CANCEL_STATUS=$step_rc
             export MOLE_CLEAN_CANCEL_STATUS
             return "$step_rc"
         fi
-        if [[ $pending_clean_cancel -eq 124 || $pending_clean_cancel -ge 128 ]]; then
+        if mole_rc_timeout_or_signal "$pending_clean_cancel"; then
             return "$pending_clean_cancel"
         fi
         if [[ "$required" == "true" && $step_rc -ne 0 ]]; then
@@ -1839,7 +1835,7 @@ perform_cleanup() {
             debug_timer_end "cleanup step: run_cloud_and_office_cleanup" \
                 _perf_cloud_office_start
             if [[ $cloud_office_rc -ne 0 ]]; then
-                if [[ $cloud_office_rc -eq 124 || $cloud_office_rc -ge 128 ]]; then
+                if mole_rc_timeout_or_signal "$cloud_office_rc"; then
                     _mole_record_clean_cancellation "$cloud_office_rc"
                     return "$cloud_office_rc"
                 else
@@ -1921,7 +1917,7 @@ perform_cleanup() {
 
     local summary_heading=""
     local summary_status="success"
-    if [[ $cleanup_cancel_rc -eq 124 ]]; then
+    if mole_rc_timeout "$cleanup_cancel_rc"; then
         if [[ "$DRY_RUN" == "true" ]]; then
             summary_heading="Dry run cancelled"
         else
@@ -1950,7 +1946,7 @@ perform_cleanup() {
 
     local -a summary_details=()
     if [[ $cleanup_cancel_rc -ne 0 ]]; then
-        if [[ $cleanup_cancel_rc -eq 124 ]]; then
+        if mole_rc_timeout "$cleanup_cancel_rc"; then
             summary_details+=("${GRAY}${ICON_WARNING}${NC} Cancelled: a scan or size check timed out (exit 124). Remaining cleanup was skipped.")
         elif [[ $cleanup_cancel_rc -ge 128 ]]; then
             summary_details+=("${GRAY}${ICON_WARNING}${NC} Cancelled: a cleanup step was interrupted (exit $cleanup_cancel_rc). Remaining cleanup was skipped.")
@@ -2124,10 +2120,9 @@ run_cloud_and_office_cleanup() {
 
     clean_cloud_storage || cleanup_rc=$?
     pending_clean_cancel="${MOLE_CLEAN_CANCEL_STATUS:-0}"
-    if [[ $cleanup_rc -eq 124 || $cleanup_rc -ge 128 ||
-        $pending_clean_cancel -eq 124 || $pending_clean_cancel -ge 128 ]]; then
+    if mole_rc_timeout_or_signal "$cleanup_rc" || mole_rc_timeout_or_signal "$pending_clean_cancel"; then
         _MOLE_CLEAN_SECTION_DEADLINE=""
-        if [[ $cleanup_rc -eq 124 || $cleanup_rc -ge 128 ]]; then
+        if mole_rc_timeout_or_signal "$cleanup_rc"; then
             return "$cleanup_rc"
         fi
         return "$pending_clean_cancel"
@@ -2137,10 +2132,9 @@ run_cloud_and_office_cleanup() {
         cleanup_rc=0
         clean_office_applications || cleanup_rc=$?
         pending_clean_cancel="${MOLE_CLEAN_CANCEL_STATUS:-0}"
-        if [[ $cleanup_rc -eq 124 || $cleanup_rc -ge 128 ||
-            $pending_clean_cancel -eq 124 || $pending_clean_cancel -ge 128 ]]; then
+        if mole_rc_timeout_or_signal "$cleanup_rc" || mole_rc_timeout_or_signal "$pending_clean_cancel"; then
             _MOLE_CLEAN_SECTION_DEADLINE=""
-            if [[ $cleanup_rc -eq 124 || $cleanup_rc -ge 128 ]]; then
+            if mole_rc_timeout_or_signal "$cleanup_rc"; then
                 return "$cleanup_rc"
             fi
             return "$pending_clean_cancel"

@@ -1,14 +1,9 @@
 #!/usr/bin/env bats
 
+load helpers/common
+
 setup_file() {
-    PROJECT_ROOT="$(cd "${BATS_TEST_DIRNAME}/.." && pwd)"
-    export PROJECT_ROOT
-
-    ORIGINAL_HOME="${HOME:-}"
-    export ORIGINAL_HOME
-
-    HOME="$(mktemp -d "${BATS_TEST_DIRNAME}/tmp-app-caches.XXXXXX")"
-    export HOME
+    mole_test_setup_home app-caches
 
     # Prevent AppleScript permission dialogs during tests
     MOLE_TEST_MODE=1
@@ -18,12 +13,7 @@ setup_file() {
 }
 
 teardown_file() {
-    if [[ "$HOME" == "${BATS_TEST_DIRNAME}/tmp-"* ]]; then
-        rm -rf "$HOME"
-    fi
-    if [[ -n "${ORIGINAL_HOME:-}" ]]; then
-        export HOME="$ORIGINAL_HOME"
-    fi
+    mole_test_teardown_home
 }
 
 make_fusion_version_dir() {
@@ -782,7 +772,7 @@ EOF
     [ "$status" -eq 0 ]
     [[ "$output" == *"ChatGPT cache"* ]] || return 1
     [[ "$output" == *"Claude desktop cache"* ]] || return 1
-    [[ "$output" == *"Google Clearcut logs"* ]] || return 1
+    [[ "$output" != *"Google Clearcut logs"* ]] || return 1
     [[ "$output" == *"LM Studio cache"* ]] || return 1
     [[ "$output" != *"Codex"* ]]
 }
@@ -1783,7 +1773,10 @@ EOF
     [[ "$output" != *"Raycast"* ]] && [[ "$output" != *"raycast"* ]]
 }
 
-@test "Xcode DerivedData cleanup propagates a size timeout before deletion" {
+@test "Xcode DerivedData cleanup keeps deleting through a size timeout and stops on a signal" {
+    # Sizing only feeds the freed total (bugs reference, section 15): a timeout
+    # leaves the project eligible and marks the total partial, a signal stops
+    # the run before any deletion.
     local isolated_home="$HOME/xcode-derived-timeout"
     mkdir -p "$isolated_home/Library/Developer/Xcode/DerivedData/App-abc"
 
@@ -1793,21 +1786,24 @@ set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/app_caches.sh"
 DRY_RUN=false
-MOLE_CLEAN_CANCEL_STATUS=0
 _xcode_cleanup_process_state() { return 1; }
-get_path_size_kb() { return 124; }
-safe_remove() { echo "UNEXPECTED_DELETE:$1"; }
-set +e
-clean_xcode_derived_data
-rc=$?
-set -e
-printf 'SIZE_RC:%s CANCEL:%s\n' "$rc" "$MOLE_CLEAN_CANCEL_STATUS"
-[[ $rc -eq 124 && $MOLE_CLEAN_CANCEL_STATUS -eq 124 ]]
+safe_remove() { echo "DELETE:$1"; }
+note_activity() { :; }
+for size_status in 124 130; do
+    MOLE_CLEAN_CANCEL_STATUS=0
+    MOLE_CLEAN_SIZING_TIMEOUTS=0
+    eval "get_path_size_kb() { return $size_status; }"
+    rc=0
+    clean_xcode_derived_data || rc=$?
+    printf 'SIZE=%s RC=%s CANCEL=%s PARTIAL=%s\n' "$size_status" "$rc" \
+        "$MOLE_CLEAN_CANCEL_STATUS" "$MOLE_CLEAN_SIZING_TIMEOUTS"
+done
 EOF
 
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"SIZE_RC:124 CANCEL:124"* ]] || return 1
-    [[ "$output" != *"UNEXPECTED_DELETE"* ]]
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"DELETE:$isolated_home/Library/Developer/Xcode/DerivedData/App-abc"*"SIZE=124 RC=0 CANCEL=0 PARTIAL=1"* ]] || { echo "$output"; return 1; }
+    [[ "$output" == *"SIZE=130 RC=130 CANCEL=130 PARTIAL=0"* ]] || { echo "$output"; return 1; }
+    [[ "$(printf '%s\n' "$output" | grep -c '^DELETE:')" -eq 1 ]]
 }
 
 @test "clean_3d_tools skips Autodesk cache while AcCoreConsole is running (#1390)" {

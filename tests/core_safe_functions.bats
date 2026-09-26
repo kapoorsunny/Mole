@@ -1,25 +1,13 @@
 #!/usr/bin/env bats
 
+load helpers/common
+
 setup_file() {
-    PROJECT_ROOT="$(cd "${BATS_TEST_DIRNAME}/.." && pwd)"
-    export PROJECT_ROOT
-
-    ORIGINAL_HOME="${HOME:-}"
-    export ORIGINAL_HOME
-
-    HOME="$(mktemp -d "${BATS_TEST_DIRNAME}/tmp-safe-functions.XXXXXX")"
-    export HOME
-
-    mkdir -p "$HOME"
+    mole_test_setup_home safe-functions
 }
 
 teardown_file() {
-    if [[ "$HOME" == "${BATS_TEST_DIRNAME}/tmp-"* ]]; then
-        rm -rf "$HOME"
-    fi
-    if [[ -n "${ORIGINAL_HOME:-}" ]]; then
-        export HOME="$ORIGINAL_HOME"
-    fi
+    mole_test_teardown_home
 }
 
 setup() {
@@ -593,6 +581,34 @@ EOF
 
     [ "$status" -eq 0 ] || return 1
     [[ "$output" == *"STATE=2"* ]] || return 1
+}
+
+@test "a stuck bundle identifier read times out and counts as unreadable" {
+    # The owner-process probe also runs at the final deletion step, so an
+    # unbounded plutil on a dataless ~/Applications bundle would hang the
+    # clean. A timed-out read must land on the same "unreadable" answer that
+    # callers already treat as busy.
+    local bundle="$HOME/Applications/Stuck.app"
+    local stub_dir="$HOME/stuck-plutil-bin"
+    mkdir -p "$bundle/Contents" "$stub_dir"
+    printf '#!/bin/bash\nsleep 30\n' > "$stub_dir/plutil"
+    chmod +x "$stub_dir/plutil"
+
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bundle="$bundle" \
+        PATH="$stub_dir:$PATH" MOLE_TIMEOUT_QUICK_DETECT_SEC=1 \
+        /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+started=$SECONDS
+rc=0
+_mole_app_bundle_identifier "$bundle" || rc=$?
+printf 'RC=%s ID=[%s] ELAPSED=%s\n' "$rc" "$_MOLE_APP_BUNDLE_ID" "$((SECONDS - started))"
+EOF
+
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"RC=1 ID=[]"* ]] || { echo "$output"; return 1; }
+    local elapsed="${output##*ELAPSED=}"
+    [[ "$elapsed" -lt 10 ]] || { echo "$output"; return 1; }
 }
 
 @test "the debug flag never changes an open-handle verdict (#1439)" {
@@ -1264,6 +1280,21 @@ EOF
         should_protect_data 'com.native-instruments.NativeAccess'
         ! should_protect_path '$HOME/Library/Application Support/Example/Cache/item'
     "
+    [ "$status" -eq 0 ]
+}
+
+@test "should_protect_path keeps Google identity and Clearcut state (#1607)" {
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+should_protect_path "$HOME/Library/Caches/GIPPseudonymousID" || exit 1
+should_protect_path "$HOME/Library/Caches/GIPPseudonymousID/device-id" || exit 1
+should_protect_path "$HOME/Library/Caches/CCTClearcutLogger" || exit 1
+should_protect_path "$HOME/Library/Caches/CCTClearcutLogger/queue.dat" || exit 1
+if should_protect_path "$HOME/Library/Caches/ordinary-app/junk"; then
+    exit 1
+fi
+EOF
     [ "$status" -eq 0 ]
 }
 
@@ -3204,13 +3235,75 @@ EOF
     [[ "$output" == *"table-broken com.brave.Browser.nightly=0"* ]]
 }
 
+@test "cache owner probe attributes a rewritten argv by the executable ps reports" {
+    # Helpers can rewrite argv so no bundle path is left in the args column.
+    # `ps -o comm=` as the last column still names the full executable, which
+    # is what the owner probe attributes by; a pid missing from that read keeps
+    # the argv heuristic, which stays busy for a line it cannot place.
+    local case_home="$HOME/rewritten-argv"
+    local apps="$case_home/Applications"
+    local name id
+    rm -rf "$case_home"
+    while IFS='|' read -r name id; do
+        mkdir -p "$apps/$name/Contents/MacOS"
+        /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string $id" \
+            "$apps/$name/Contents/Info.plist" > /dev/null
+    done <<'APPS'
+Brave Browser Nightly.app|com.brave.Browser.nightly
+Brave Origin Nightly.app|com.brave.Browser.origin.nightly
+Autodesk Fusion.app|com.autodesk.fusion360
+APPS
+    local origin_helper="$apps/Brave Origin Nightly.app/Contents/MacOS/Brave Origin Nightly Helper"
+    local nightly="$apps/Brave Browser Nightly.app/Contents/MacOS/Brave Browser Nightly"
+    local console="$apps/Autodesk Fusion.app/Contents/MacOS/AcCoreConsole"
+    printf '  PID  PPID COMM ARGS\n  801     1 %s Brave Origin Nightly Helper --type=renderer\n' \
+        "${origin_helper:0:16}" > "$case_home/rewritten-table"
+    printf '  801 %s\n' "$origin_helper" > "$case_home/rewritten-exe"
+    : > "$case_home/rewritten-exe-missing"
+    printf '  PID  PPID COMM ARGS\n  802     1 %s Brave Browser Nightly --restore\n' \
+        "${nightly:0:16}" > "$case_home/owner-table"
+    printf '  802 %s\n' "$nightly" > "$case_home/owner-exe"
+    printf '  PID  PPID COMM ARGS\n  803     1 %s AcCoreConsole --vendor autodesk\n' \
+        "${console:0:16}" > "$case_home/helper-table"
+    printf '  803 %s\n' "$console" > "$case_home/helper-exe"
+
+    run env HOME="$case_home" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/file_ops.sh"
+ps() {
+    case "$*" in
+        *comm=*) cat "$HOME/$EXE" ;;
+        *) cat "$HOME/$TABLE" ;;
+    esac
+}
+probe() {
+    local state=0
+    _mole_reset_process_snapshot
+    TABLE="$1"
+    EXE="$2"
+    _mole_user_cache_owner_process_state "$3" || state=$?
+    printf '%s/%s %s=%s\n' "$1" "$2" "$3" "$state"
+}
+probe rewritten-table rewritten-exe com.brave.Browser.nightly
+probe rewritten-table rewritten-exe-missing com.brave.Browser.nightly
+probe owner-table owner-exe com.brave.Browser.nightly
+probe helper-table helper-exe com.autodesk.AcCoreConsole
+EOF
+
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"rewritten-table/rewritten-exe com.brave.Browser.nightly=1"* ]] || { echo "$output"; return 1; }
+    [[ "$output" == *"rewritten-table/rewritten-exe-missing com.brave.Browser.nightly=0"* ]] || { echo "$output"; return 1; }
+    [[ "$output" == *"owner-table/owner-exe com.brave.Browser.nightly=0"* ]] || { echo "$output"; return 1; }
+    [[ "$output" == *"helper-table/helper-exe com.autodesk.AcCoreConsole=0"* ]]
+}
+
 @test "cache owner probes reuse one process table snapshot" {
 	run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/file_ops.sh"
 ps_calls=$(mktemp)
 ps() {
-	printf 'call\n' >> "$ps_calls"
+	printf '%s\n' "$*" >> "$ps_calls"
 	cat <<'TABLE'
   PID  PPID COMM             ARGS
   601     1 /Applications/Example.app/Contents/MacOS/Example /Applications/Example.app/Contents/MacOS/Example com.example.First
@@ -3220,14 +3313,17 @@ first_state=0
 _mole_user_cache_owner_process_state "com.example.First" || first_state=$?
 second_state=0
 _mole_user_cache_owner_process_state "com.example.Second" || second_state=$?
-call_count=$(wc -l < "$ps_calls" | tr -d ' ')
+# One snapshot is one table read plus one executable-path read.
+table_calls=$(grep -c 'pid,ppid,comm,args' "$ps_calls" || true)
+exe_calls=$(grep -c 'pid=,comm=' "$ps_calls" || true)
+call_count="${table_calls}+${exe_calls}"
 command rm -f "$ps_calls"
 printf 'FIRST=%s SECOND=%s CALLS=%s STATE=%s\n' \
 	"$first_state" "$second_state" "$call_count" "$_MOLE_PROCESS_TABLE_STATE"
 EOF
 
 	[ "$status" -eq 0 ] || return 1
-	[[ "$output" == "FIRST=0 SECOND=1 CALLS=1 STATE=ok" ]] || return 1
+	[[ "$output" == "FIRST=0 SECOND=1 CALLS=1+1 STATE=ok" ]] || return 1
 }
 
 @test "safe_remove refreshes process evidence at the final deletion boundary" {

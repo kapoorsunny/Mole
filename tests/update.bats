@@ -1,8 +1,9 @@
 #!/usr/bin/env bats
 
+load helpers/common
+
 setup_file() {
-	PROJECT_ROOT="$(cd "${BATS_TEST_DIRNAME}/.." && pwd)"
-	export PROJECT_ROOT
+	mole_test_setup_project_root
 }
 
 setup() {
@@ -874,6 +875,7 @@ SCRIPT
 @test "installer sudo reuse uses non-interactive sudo checks" {
 	run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" MOLE_TEST_MODE=0 MOLE_TEST_NO_AUTH=0 /bin/bash --noprofile --norc << 'EOF'
 set -euo pipefail
+mole_source_installer
 
 INSTALL_DIR="$HOME/install"
 CONFIG_DIR="$HOME/config"
@@ -885,7 +887,6 @@ SUDO_LOG="$HOME/sudo.log"
 mkdir -p "$INSTALL_DIR" "$CONFIG_DIR" "$SOURCE_DIR"
 chmod a-w "$INSTALL_DIR"
 
-eval "$(sed -n '/^needs_sudo()/,/^resolve_source_dir()/p' "$PROJECT_ROOT/install.sh" | sed '$d')"
 
 log_error() { echo "ERROR:$*"; }
 sudo() {

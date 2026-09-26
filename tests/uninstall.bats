@@ -1,26 +1,13 @@
 #!/usr/bin/env bats
 
+load helpers/common
+
 setup_file() {
-    PROJECT_ROOT="$(cd "${BATS_TEST_DIRNAME}/.." && pwd)"
-    export PROJECT_ROOT
-
-    ORIGINAL_HOME="${BATS_TMPDIR:-}" # Use BATS_TMPDIR as original HOME if set by bats
-    if [[ -z "$ORIGINAL_HOME" ]]; then
-        ORIGINAL_HOME="${HOME:-}"
-    fi
-    export ORIGINAL_HOME
-
-    HOME="$(mktemp -d "${BATS_TEST_DIRNAME}/tmp-uninstall-home.XXXXXX")"
-    export HOME
+    mole_test_setup_home uninstall-home
 }
 
 teardown_file() {
-    if [[ "$HOME" == "${BATS_TEST_DIRNAME}/tmp-"* ]]; then
-        rm -rf "$HOME"
-    fi
-    if [[ -n "${ORIGINAL_HOME:-}" ]]; then
-        export HOME="$ORIGINAL_HOME"
-    fi
+    mole_test_teardown_home
 }
 
 setup() {
@@ -357,6 +344,8 @@ EOF
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/uninstall/batch.sh"
+# Homebrew is present but owns no cask; the real brew is never consulted.
+brew() { :; }
 
 request_sudo_access() { return 0; }
 start_inline_spinner() { :; }
@@ -402,6 +391,8 @@ EOF
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/uninstall/batch.sh"
+# Homebrew is present but owns no cask; the real brew is never consulted.
+brew() { :; }
 export MOLE_DELETE_MODE=trash
 
 start_inline_spinner() { :; }
@@ -445,6 +436,8 @@ EOF
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/uninstall/batch.sh"
+# Homebrew is present but owns no cask; the real brew is never consulted.
+brew() { :; }
 export MOLE_DELETE_MODE=permanent
 
 start_inline_spinner() { :; }
@@ -1339,6 +1332,8 @@ EOF
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/uninstall/batch.sh"
+# Homebrew is present but owns no cask; the real brew is never consulted.
+brew() { :; }
 
 request_sudo_access() { return 0; }
 start_inline_spinner() { :; }
@@ -1407,6 +1402,8 @@ EOF
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/uninstall/batch.sh"
+# Homebrew is present but owns no cask; the real brew is never consulted.
+brew() { :; }
 
 request_sudo_access() { return 0; }
 start_inline_spinner() { :; }
@@ -1565,6 +1562,8 @@ EOF
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/uninstall/batch.sh"
+# Homebrew is present but owns no cask; the real brew is never consulted.
+brew() { :; }
 
 request_sudo_access() { return 0; }
 start_inline_spinner() { :; }
@@ -1622,6 +1621,8 @@ EOF
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/uninstall/batch.sh"
+# Homebrew is present but owns no cask; the real brew is never consulted.
+brew() { :; }
 
 request_sudo_access() { return 0; }
 start_inline_spinner() { :; }
@@ -1984,6 +1985,8 @@ EOF
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/uninstall/batch.sh"
+# Homebrew is present but owns no cask; the real brew is never consulted.
+brew() { :; }
 
 request_sudo_access() { return 0; }
 start_inline_spinner() { :; }
@@ -2091,6 +2094,8 @@ EOF
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/uninstall/batch.sh"
+# Homebrew is present but owns no cask; the real brew is never consulted.
+brew() { :; }
 
 request_sudo_access() { return 0; }
 start_inline_spinner() { :; }
@@ -2135,9 +2140,7 @@ EOF
 @test "uninstall_persist_cache_file heals non-writable destination" {
     run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
 set -euo pipefail
-
-# Source only the helper by evaluating its function definition.
-eval "$(sed -n '/^uninstall_persist_cache_file()/,/^}$/p' "$PROJECT_ROOT/bin/uninstall.sh")"
+source "$PROJECT_ROOT/bin/uninstall.sh"
 
 src="$HOME/cache.src"
 dst="$HOME/cache.dst"
@@ -2166,7 +2169,7 @@ EOF
     # approach only cares about whether the helper itself completed.
     run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
 set -euo pipefail
-eval "$(sed -n '/^uninstall_persist_cache_file()/,/^}$/p' "$PROJECT_ROOT/bin/uninstall.sh")"
+source "$PROJECT_ROOT/bin/uninstall.sh"
 
 src="$HOME/snap.src"
 dst="$HOME/snap.dst"
@@ -2201,7 +2204,7 @@ EOF
 @test "uninstall_persist_cache_file is a no-op when source is empty" {
     run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
 set -euo pipefail
-eval "$(sed -n '/^uninstall_persist_cache_file()/,/^}$/p' "$PROJECT_ROOT/bin/uninstall.sh")"
+source "$PROJECT_ROOT/bin/uninstall.sh"
 
 src="$HOME/empty.src"
 dst="$HOME/keep.dst"
@@ -2220,8 +2223,7 @@ EOF
 @test "cached uninstall metadata is rejected when the current bundle is protected" {
     run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
 set -euo pipefail
-source "$PROJECT_ROOT/lib/core/common.sh"
-eval "$(sed -n '/^uninstall_resolve_bundle_id()/,/^uninstall_app_inventory_fingerprint()/p' "$PROJECT_ROOT/bin/uninstall.sh" | sed '$d')"
+source "$PROJECT_ROOT/bin/uninstall.sh"
 
 app_path="$HOME/Applications/Safari.app"
 mkdir -p "$app_path/Contents"
@@ -2248,8 +2250,7 @@ EOF
 @test "cached uninstall metadata is rejected when the app is background-only" {
     run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
 set -euo pipefail
-source "$PROJECT_ROOT/lib/core/common.sh"
-eval "$(sed -n '/^uninstall_resolve_bundle_id()/,/^uninstall_app_inventory_fingerprint()/p' "$PROJECT_ROOT/bin/uninstall.sh" | sed '$d')"
+source "$PROJECT_ROOT/bin/uninstall.sh"
 uninstall_print_app_search_dirs() { printf '%s\n' "$HOME/Applications"; }
 
 app_path="$HOME/Applications/Vendor/Helper.app"
@@ -2279,8 +2280,7 @@ EOF
 @test "OneDrive Mac App Store bundle is eligible even when marked background-only" {
     run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
 set -euo pipefail
-source "$PROJECT_ROOT/lib/core/common.sh"
-eval "$(sed -n '/^uninstall_resolve_bundle_id()/,/^uninstall_app_inventory_fingerprint()/p' "$PROJECT_ROOT/bin/uninstall.sh" | sed '$d')"
+source "$PROJECT_ROOT/bin/uninstall.sh"
 uninstall_print_app_search_dirs() { printf '%s\n' "$HOME/Applications"; }
 
 app_path="$HOME/Applications/OneDrive.app"
@@ -2311,8 +2311,7 @@ EOF
 @test "eligible uninstall metadata uses the current bundle id over stale cache" {
     run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
 set -euo pipefail
-source "$PROJECT_ROOT/lib/core/common.sh"
-eval "$(sed -n '/^uninstall_resolve_bundle_id()/,/^uninstall_app_inventory_fingerprint()/p' "$PROJECT_ROOT/bin/uninstall.sh" | sed '$d')"
+source "$PROJECT_ROOT/bin/uninstall.sh"
 
 app_path="$HOME/Applications/Plain.app"
 mkdir -p "$app_path/Contents"
@@ -2511,7 +2510,14 @@ _run_display_name_case() {
         APP_PATH="$app_path" APP_NAME="$app_name" \
         /bin/bash --noprofile --norc << 'EOF'
 set -euo pipefail
-source "$PROJECT_ROOT/lib/core/common.sh"
+# bin/uninstall.sh freezes these as readonly while it is sourced: the user's
+# locale before it forces C, the mdls budget, and the language list it reads
+# from `defaults`. Feed each one where the script reads it.
+unset LC_ALL LANG
+export MOLE_UNINSTALL_INLINE_MDLS_DISPLAY_TIMEOUT_SEC=3
+defaults() { [[ -z "$LANGS" ]] || printf '%s\n' "$LANGS"; }
+source "$PROJECT_ROOT/bin/uninstall.sh"
+[[ "$MOLE_UNINSTALL_PREFERRED_LANGS" == "$LANGS" ]] || { echo "LANGS_NOT_APPLIED"; exit 1; }
 
 # mdls only ever reports the on-disk file name for an app bundle, which is the
 # string this behavior exists to replace. Stub it so the case cannot pass by
@@ -2521,15 +2527,6 @@ run_with_timeout() {
     "$@"
 }
 mdls() { printf '%s\n' "$(basename "$APP_PATH")"; }
-
-for _fn in _uninstall_lproj_candidates _uninstall_localized_bundle_name uninstall_resolve_display_name; do
-    eval "$(sed -n "/^${_fn}()/,/^}/p" "$PROJECT_ROOT/bin/uninstall.sh")"
-done
-
-MOLE_UNINSTALL_USER_LC_ALL=""
-MOLE_UNINSTALL_USER_LANG=""
-MOLE_UNINSTALL_INLINE_MDLS_DISPLAY_TIMEOUT_SEC=3
-MOLE_UNINSTALL_PREFERRED_LANGS="$LANGS"
 
 uninstall_resolve_display_name "$APP_PATH" "$APP_NAME"
 EOF
@@ -2577,7 +2574,12 @@ EOF
 @test "uninstall_resolve_display_name keeps versioned app names when metadata is generic" {
     run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
 set -euo pipefail
-source "$PROJECT_ROOT/lib/core/common.sh"
+# bin/uninstall.sh freezes the user's locale and language list as readonly
+# while it is sourced; start both empty so no host setting reaches the case.
+unset LC_ALL LANG
+defaults() { return 1; }
+source "$PROJECT_ROOT/bin/uninstall.sh"
+[[ -z "$MOLE_UNINSTALL_PREFERRED_LANGS" ]] || { echo "HOST_LANGS_LEAKED"; exit 1; }
 
 function run_with_timeout() {
     shift
@@ -2595,14 +2597,6 @@ function plutil() {
     fi
     return 1
 }
-
-MOLE_UNINSTALL_USER_LC_ALL=""
-MOLE_UNINSTALL_USER_LANG=""
-
-for _fn in _uninstall_lproj_candidates _uninstall_localized_bundle_name uninstall_resolve_display_name; do
-    eval "$(sed -n "/^${_fn}()/,/^}/p" "$PROJECT_ROOT/bin/uninstall.sh")"
-done
-MOLE_UNINSTALL_PREFERRED_LANGS="${MOLE_UNINSTALL_PREFERRED_LANGS:-}"
 
 app_path="$HOME/Applications/Xcode 16.4.app"
 mkdir -p "$app_path/Contents"
@@ -3049,6 +3043,7 @@ EOF
 @test "main clears pending input before app selection after scan (#726)" {
     run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'INNER'
 set -euo pipefail
+source "$PROJECT_ROOT/bin/uninstall.sh"
 
 trace_file="$HOME/uninstall-trace.log"
 app_cache_file="$HOME/apps-cache.txt"
@@ -3075,8 +3070,6 @@ select_apps_for_uninstall() {
     return 1
 }
 
-eval "$(sed -n '/^main()/,/main "\$@"/p' "$PROJECT_ROOT/bin/uninstall.sh" | sed '$d')"
-
 main
 
 expected=$(printf 'load\ndrain\nselect\n')
@@ -3093,6 +3086,7 @@ INNER
 @test "main keeps scan and selector on one alternate screen until cancel (#1194)" {
     run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'INNER'
 set -euo pipefail
+source "$PROJECT_ROOT/bin/uninstall.sh"
 
 trace_file="$HOME/uninstall-screen-trace.log"
 app_cache_file="$HOME/apps-cache.txt"
@@ -3130,8 +3124,6 @@ select_apps_for_uninstall() {
     return 1
 }
 
-eval "$(sed -n '/^main()/,/main "\$@"/p' "$PROJECT_ROOT/bin/uninstall.sh" | sed '$d')"
-
 main
 
 expected=$(printf 'start\nscan\nfingerprint\nload\ndrain\nselect\nstop\n')
@@ -3148,13 +3140,10 @@ INNER
 @test "scan_applications starts feedback before discovery and cleans no-app state" {
     run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" MOLE_TEST_FORCE_SCAN_SPINNER=1 /bin/bash --noprofile --norc << 'INNER'
 set -euo pipefail
+source "$PROJECT_ROOT/bin/uninstall.sh"
 
 trace_file="$HOME/scan-feedback-trace.log"
 scan_temp="$HOME/scan-feedback-temp"
-
-MOLE_UNINSTALL_META_CACHE_DIR="$HOME/.cache/mole"
-MOLE_UNINSTALL_META_CACHE_FILE="$MOLE_UNINSTALL_META_CACHE_DIR/uninstall_app_metadata_v2"
-MOLE_UNINSTALL_META_CACHE_LOCK="${MOLE_UNINSTALL_META_CACHE_FILE}.lock"
 
 create_temp_file() { printf '%s\n' "$scan_temp"; }
 ensure_user_dir() { mkdir -p "$1"; }
@@ -3175,8 +3164,6 @@ _scan_partition_cache() { printf 'partition\n' >> "$trace_file"; }
 _scan_resolve_uncached() { printf 'resolve\n' >> "$trace_file"; }
 _scan_dedupe_bundle_ids() { printf 'dedupe\n' >> "$trace_file"; }
 _scan_finalize_index() { printf 'finalize\n' >> "$trace_file"; }
-
-eval "$(sed -n '/^scan_applications()/,/^load_applications()/p' "$PROJECT_ROOT/bin/uninstall.sh" | sed '$d')"
 
 set +e
 scan_applications > "$HOME/scan-feedback.out" 2> "$HOME/scan-feedback.err"
@@ -3480,7 +3467,7 @@ CACHE
     run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" FIRST_CACHE="$first_cache" \
         /bin/bash --noprofile --norc << 'INNER'
 set -euo pipefail
-source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/bin/uninstall.sh"
 
 trace_file="$HOME/uninstall-866-trace.log"
 scan_state_file="$HOME/uninstall-866-scan-count"
@@ -3541,9 +3528,6 @@ select_apps_for_uninstall() {
     return 1
 }
 
-eval "$(sed -n '/^uninstall_inventory_can_reuse_cached_apps()/,/^}/p' "$PROJECT_ROOT/bin/uninstall.sh")"
-eval "$(sed -n '/^main()/,/main "\$@"/p' "$PROJECT_ROOT/bin/uninstall.sh" | sed '$d')"
-
 printf '\n' | main
 
 expected=$(printf 'scan:1\nload:%s/Applications/FirstApp.app|FirstApp|com.example.FirstApp|10MB|Today|10240\nselect:1\nbatch\nload:%s/Applications/SecondApp.app|SecondApp|com.example.SecondApp|11MB|Today|11264\nselect:2\n' "$HOME" "$HOME")
@@ -3565,7 +3549,7 @@ INNER
     run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" APPS_CACHE_FILE="$apps_cache" \
         /bin/bash --noprofile --norc << 'INNER'
 set -euo pipefail
-source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/bin/uninstall.sh"
 
 log_operation_session_start() { :; }
 hide_cursor() { :; }
@@ -3597,7 +3581,6 @@ read() {
     builtin read "$@"
 }
 
-eval "$(sed -n '/^main()/,/main \"\$@\"/p' "$PROJECT_ROOT/bin/uninstall.sh" | sed '$d')"
 main > "$HOME/countdown.out" 2> "$HOME/countdown.err"
 
 [[ "$(cat "$HOME/countdown.err")" != *'Input/output error'* ]] || {
@@ -3617,7 +3600,7 @@ INNER
 @test "inventory cache reuse accepts removals only and rejects stale changes (#1315)" {
     run env HOME="$HOME/inventory-reuse" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'INNER'
 set -euo pipefail
-eval "$(sed -n '/^uninstall_inventory_can_reuse_cached_apps()/,/^}/p' "$PROJECT_ROOT/bin/uninstall.sh")"
+source "$PROJECT_ROOT/bin/uninstall.sh"
 
 mkdir -p "$HOME/Applications/First.app" "$HOME/Applications/Second.app"
 mkdir -p "$HOME/Applications/With|Pipe.app"
@@ -3654,9 +3637,7 @@ INNER
 @test "inventory fingerprint changes when only Info.plist changes" {
     run env HOME="$HOME/inventory-plist-mtime" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'INNER'
 set -euo pipefail
-source "$PROJECT_ROOT/lib/core/common.sh"
-eval "$(sed -n '/^uninstall_print_app_paths_with_mtime()/,/^}/p' "$PROJECT_ROOT/bin/uninstall.sh")"
-eval "$(sed -n '/^uninstall_app_inventory_fingerprint()/,/^}/p' "$PROJECT_ROOT/bin/uninstall.sh")"
+source "$PROJECT_ROOT/bin/uninstall.sh"
 
 app_path="$HOME/Applications/Mutable.app"
 mkdir -p "$app_path/Contents"
@@ -3941,7 +3922,7 @@ INNER
     run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" MOLE_TEST_NO_AUTH=1 \
         APPS_CACHE_FILE="$apps_cache" /bin/bash --noprofile --norc << 'INNER'
 set -euo pipefail
-source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/bin/uninstall.sh"
 
 log_operation_session_start() { :; }
 show_uninstall_help() { :; }
@@ -3959,7 +3940,6 @@ select_apps_for_uninstall() {
     return 1
 }
 
-eval "$(sed -n '/^main()/,/main "\$@"/p' "$PROJECT_ROOT/bin/uninstall.sh" | sed '$d')"
 main
 INNER
 
@@ -3975,7 +3955,7 @@ INNER
     run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" MOLE_TEST_NO_AUTH=1 \
         APPS_CACHE_FILE="$apps_cache" /bin/bash --noprofile --norc << 'INNER'
 set -euo pipefail
-source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/bin/uninstall.sh"
 
 log_operation_session_start() { :; }
 show_uninstall_help() { :; }
@@ -3993,7 +3973,6 @@ select_apps_for_uninstall() {
     return 1
 }
 
-eval "$(sed -n '/^main()/,/main "\$@"/p' "$PROJECT_ROOT/bin/uninstall.sh" | sed '$d')"
 main --permanent
 INNER
 
@@ -4018,7 +3997,7 @@ CACHE
     run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" MOLE_TEST_NO_AUTH=1 \
         APPS_CACHE_FILE="$apps_cache" /bin/bash --noprofile --norc << 'INNER'
 set -euo pipefail
-source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/bin/uninstall.sh"
 
 log_operation_session_start() { :; }
 show_uninstall_help() { :; }
@@ -4035,11 +4014,9 @@ load_applications() {
 # Stub Homebrew so test stays hermetic and brew detection never fires.
 is_homebrew_available() { return 1; }
 get_brew_cask_name() { return 1; }
-# Stubbed because the production helper lives earlier in bin/uninstall.sh
-# and our sed slice only pulls list-related helpers + main().
+# Stubbed so the size column never probes a real /Applications bundle.
 uninstall_normalize_size_display() { local s="${1:-}"; [[ -z "$s" || "$s" == "0" || "$s" == "Unknown" ]] && echo "N/A" || echo "$s"; }
 
-eval "$(sed -n '/^uninstall_list_json_escape()/,/main "\$@"/p' "$PROJECT_ROOT/bin/uninstall.sh" | sed '$d')"
 # Force text mode by simulating a TTY for stdout via /dev/tty redirect not
 # available in bats; instead pipe through a wrapper that fakes -t 1. Simplest:
 # call the function directly so [[ -t 1 ]] uses bash's stdout (the bats pipe).
@@ -4067,7 +4044,7 @@ CACHE
     run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" MOLE_TEST_NO_AUTH=1 \
         APPS_CACHE_FILE="$apps_cache" /bin/bash --noprofile --norc << 'INNER'
 set -euo pipefail
-source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/bin/uninstall.sh"
 
 log_operation_session_start() { :; }
 show_uninstall_help() { :; }
@@ -4083,11 +4060,9 @@ load_applications() {
 }
 is_homebrew_available() { return 1; }
 get_brew_cask_name() { return 1; }
-# Stubbed because the production helper lives earlier in bin/uninstall.sh
-# and our sed slice only pulls list-related helpers + main().
+# Stubbed so the size column never probes a real /Applications bundle.
 uninstall_normalize_size_display() { local s="${1:-}"; [[ -z "$s" || "$s" == "0" || "$s" == "Unknown" ]] && echo "N/A" || echo "$s"; }
 
-eval "$(sed -n '/^uninstall_list_json_escape()/,/main "\$@"/p' "$PROJECT_ROOT/bin/uninstall.sh" | sed '$d')"
 main --list
 INNER
 
@@ -4111,7 +4086,7 @@ INNER
     run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" MOLE_TEST_NO_AUTH=1 \
         APPS_CACHE_FILE="$apps_cache" /bin/bash --noprofile --norc << 'INNER'
 set -euo pipefail
-source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/bin/uninstall.sh"
 
 log_operation_session_start() { :; }
 show_uninstall_help() { :; }
@@ -4125,11 +4100,9 @@ load_applications() {
 }
 is_homebrew_available() { return 1; }
 get_brew_cask_name() { return 1; }
-# Stubbed because the production helper lives earlier in bin/uninstall.sh
-# and our sed slice only pulls list-related helpers + main().
+# Stubbed so the size column never probes a real /Applications bundle.
 uninstall_normalize_size_display() { local s="${1:-}"; [[ -z "$s" || "$s" == "0" || "$s" == "Unknown" ]] && echo "N/A" || echo "$s"; }
 
-eval "$(sed -n '/^uninstall_list_json_escape()/,/main "\$@"/p' "$PROJECT_ROOT/bin/uninstall.sh" | sed '$d')"
 main --list
 INNER
 
@@ -4148,7 +4121,7 @@ CACHE
     run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" MOLE_TEST_NO_AUTH=1 \
         APPS_CACHE_FILE="$apps_cache" /bin/bash --noprofile --norc << 'INNER'
 set -euo pipefail
-source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/bin/uninstall.sh"
 
 log_operation_session_start() { :; }
 show_uninstall_help() { :; }
@@ -4167,7 +4140,6 @@ is_homebrew_available() { return 0; }
 get_brew_cask_name() { printf '%s' "visual-studio-code"; return 0; }
 uninstall_normalize_size_display() { local s="${1:-}"; [[ -z "$s" || "$s" == "0" || "$s" == "Unknown" ]] && echo "N/A" || echo "$s"; }
 
-eval "$(sed -n '/^uninstall_list_json_escape()/,/main "\$@"/p' "$PROJECT_ROOT/bin/uninstall.sh" | sed '$d')"
 main --list
 INNER
 

@@ -1,14 +1,9 @@
 #!/usr/bin/env bats
 
+load helpers/common
+
 setup_file() {
-    PROJECT_ROOT="$(cd "${BATS_TEST_DIRNAME}/.." && pwd)"
-    export PROJECT_ROOT
-
-    ORIGINAL_HOME="${HOME:-}"
-    export ORIGINAL_HOME
-
-    HOME="$(mktemp -d "${BATS_TEST_DIRNAME}/tmp-clean-home.XXXXXX")"
-    export HOME
+    mole_test_setup_home clean-home
 
     # Prevent AppleScript permission dialogs during tests
     MOLE_TEST_MODE=1
@@ -26,12 +21,7 @@ setup_file() {
 }
 
 teardown_file() {
-    if [[ "$HOME" == "${BATS_TEST_DIRNAME}/tmp-"* ]]; then
-        rm -rf "$HOME"
-    fi
-    if [[ -n "${ORIGINAL_HOME:-}" ]]; then
-        export HOME="$ORIGINAL_HOME"
-    fi
+    mole_test_teardown_home
 }
 
 setup() {
@@ -696,7 +686,7 @@ EOF
     run_clean_dry_run
     [ "$status" -eq 0 ]
     [[ "$output" == *"Dry Run Mode"* ]] || return 1
-    [[ "$output" == *"sudo -v && mo clean --dry-run"* ]]
+    [[ "$output" == *"sudo -v && mo clean --dry-run"* ]] || return 1
     [[ "$output" != *"system preview included"* ]]
 }
 
@@ -723,7 +713,7 @@ MOCK
 
     run_clean_dry_run
     [ "$status" -eq 0 ]
-    [[ "$output" == *"sudo -v && mo clean --dry-run"* ]]
+    [[ "$output" == *"sudo -v && mo clean --dry-run"* ]] || return 1
     [[ "$output" != *"sudo should not be called"* ]]
 }
 
@@ -1276,6 +1266,9 @@ render_case() {
         record "path:/a$sep$sep/b/c" 0 1 false "/a$sep$sep/b/c"
         record "path:/n$nl" 200 1 true "/n$nl"
         record "path:/n$nl/sub" 50 1 true "/n$nl/sub"
+        # A child whose last component is a newline, directly after a slash.
+        record "path:/t" 100 1 true "/t"
+        record "path:/t/$nl" 30 1 true "/t/$nl"
     else
         record "path:/p" 100 1 true "/p"
         record "path:/p/q" 0 3 false "/p/q"
@@ -1307,9 +1300,10 @@ EOF
     }
     local engine
     for engine in perl bash; do
-        # /a + /b + the separator identity + /n; /n/sub is covered by /n and
-        # the unknown separator path has no real ancestor, so it stays partial.
-        [[ "$output" == *"$engine mixed TOTAL_KB=500 ITEMS=5 PARTIAL=true"* ]] || return 1
+        # /a + /b + the separator identity + /n + /t; /n/sub and /t/<newline>
+        # are covered by their parents, and the unknown separator path has no
+        # real ancestor, so it stays partial.
+        [[ "$output" == *"$engine mixed TOTAL_KB=600 ITEMS=6 PARTIAL=true"* ]] || return 1
         [[ "$output" == *"$engine covered TOTAL_KB=100 ITEMS=1 PARTIAL=false"* ]] || return 1
     done
     [[ "$output" == *"MIXED_LEDGER_EQUAL"* ]] || return 1
