@@ -574,7 +574,7 @@ EOF
     done
 }
 
-@test "stop_launch_services tries every root after one times out" {
+@test "stop_launch_services propagates an unload timeout after one scan" {
     mkdir -p "$HOME/Library/LaunchAgents"
 
     run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
@@ -596,7 +596,7 @@ EOF
         return 1
     }
     [[ "$output" == *"RC=124"* ]] || return 1
-    [[ "$(grep -c '^ROOT:' "$HOME/unload-roots.log" 2> /dev/null || true)" -eq 2 ]]
+    [[ "$(grep -c '^ROOT:' "$HOME/unload-roots.log" 2> /dev/null || true)" -eq 1 ]]
 }
 
 @test "batch uninstall names the app and step when a removal times out" {
@@ -1604,9 +1604,19 @@ EOF
     # the selected beta must still be unloaded under the guard (the bundle id
     # is demoted to "unknown", but the path scan is exact evidence), while the
     # one pointing at the survivor must stay loaded.
-    mkdir -p "$HOME/Library/LaunchAgents"
-    printf '%s' "$HOME/Applications/SharedName-beta.app/Contents/MacOS/SharedName" > "$HOME/Library/LaunchAgents/com.thirdparty.betahelper.plist"
-    printf '%s' "$HOME/Applications/SharedName.app/Contents/MacOS/SharedName" > "$HOME/Library/LaunchAgents/com.thirdparty.stablehelper.plist"
+    mkdir -p "$HOME/Library/LaunchAgents" \
+        "$HOME/Applications/SharedName-beta.app/Contents/MacOS" \
+        "$HOME/Applications/SharedName.app/Contents/MacOS"
+    touch "$HOME/Applications/SharedName-beta.app/Contents/MacOS/SharedName" \
+        "$HOME/Applications/SharedName.app/Contents/MacOS/SharedName"
+    cat > "$HOME/Library/LaunchAgents/com.thirdparty.betahelper.plist" <<PLIST
+<?xml version="1.0"?><plist version="1.0"><dict><key>Program</key><string>$HOME/Applications/SharedName-beta.app/Contents/MacOS/SharedName</string></dict></plist>
+PLIST
+    cat > "$HOME/Library/LaunchAgents/com.thirdparty.stablehelper.plist" <<PLIST
+<?xml version="1.0"?><plist version="1.0"><dict><key>Program</key><string>$HOME/Applications/SharedName.app/Contents/MacOS/SharedName</string></dict></plist>
+PLIST
+    mole_test_fake_command launchctl \
+        "if [[ \"\$1\" == unload ]]; then printf 'UNLOAD:%s\\n' \"\$2\" >> \"\$HOME/unload.log\"; fi"
 
     run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
 set -euo pipefail
@@ -1628,7 +1638,6 @@ pkill() { return 0; }
 sudo() { return 0; }
 remove_login_item() { printf 'LOGIN_ITEM:%s\n' "$1" >> "$HOME/login.log"; }
 force_kill_app() { printf 'KILL:%s\n' "$1" >> "$HOME/kill.log"; return 0; }
-unload_launch_plist() { printf 'UNLOAD:%s\n' "$1" >> "$HOME/unload.log"; }
 
 # Case 1: display names collide ("SharedName" for both) but basenames differ.
 # Discovery must use the basename (SharedName-beta) so the survivor's
@@ -1734,7 +1743,10 @@ grep -q "KILL:SoloApp" "$HOME/kill.log" 2> /dev/null || { echo "WRONG: terminati
 [[ ! -f "$HOME/Library/Logs/DiagnosticReports/SoloApp-2026-07-03-101010.ips" ]] || { echo "WRONG: diagnostic reports not collected without sibling guard (case 5)"; exit 1; }
 EOF
 
-    [ "$status" -eq 0 ]
+    [ "$status" -eq 0 ] || {
+        echo "$output"
+        return 1
+    }
 }
 
 @test "batch_uninstall_applications blocks official-uninstaller apps" {
@@ -1814,14 +1826,110 @@ grep -q "Review only: ~/system/com.example.review.helper" "$HOME/output.log"
 [[ "$(grep -cF "~/system/com.example.review.helper" "$HOME/output.log")" -eq 1 ]] || exit 1
 grep -q "Kept 1 system-level path, which Mole never removes" "$HOME/output.log"
 # Keeping system paths is the designed outcome, so the run is not "incomplete".
-! grep -q "Uninstall incomplete" "$HOME/output.log"
+! grep -q "Uninstall incomplete" "$HOME/output.log" || exit 1
 grep -q "Uninstall complete" "$HOME/output.log"
 # The point of the whole case: the file is reported, never deleted.
-! grep -q "$HOME/system/com.example.review.helper" "$HOME/remove.log"
+! grep -q "$HOME/system/com.example.review.helper" "$HOME/remove.log" || exit 1
 [[ -e "$HOME/system/com.example.review.helper" ]]
 EOF
 
     [ "$status" -eq 0 ]
+}
+
+
+# Exercise the production removal/accounting phase with fixture-only sinks.
+run_leftover_accounting_case() {
+    local du_status="$1" expected_status="$2" expected_freed="$3" du_shape="${4:-total}"
+    # shellcheck disable=SC2016 # Expanded by the PATH stub when du runs.
+    mole_test_fake_command du '
+printf "%s\n" "$*" >> "$HOME/du.log"
+case "$DU_SHAPE" in
+    total) printf "40\t%s\n60\t%s\n100\ttotal\n" "$HOME/retained-one" "$HOME/retained-two" ;;
+    no-total) printf "40\t%s\n" "$HOME/retained-one" ;;
+    invalid-total) printf "unknown\ttotal\n" ;;
+esac
+exit "$DU_STATUS"'
+    run env HOME="$HOME/leftover-accounting-$du_status-$du_shape" PROJECT_ROOT="$PROJECT_ROOT" \
+        DU_STATUS="$du_status" DU_SHAPE="$du_shape" EXPECTED_STATUS="$expected_status" EXPECTED_FREED="$expected_freed" \
+        /bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/uninstall/batch.sh"
+mkdir -p "$HOME/Applications/First.app" "$HOME/Applications/Second.app" \
+    "$HOME/retained-one" "$HOME/retained-two"
+stop_launch_services() { :; }
+unregister_app_bundle() { :; }
+remove_file_list() { :; }
+mole_delete() {
+    printf '%s\n' "$1" >> "$HOME/removed.log"
+    rmdir "$1"
+}
+
+first="$HOME/Applications/First.app"
+second="$HOME/Applications/Second.app"
+encoded=$(printf '%s\n' "$HOME/retained-one" "$HOME/retained-two" | base64 | tr -d '\n')
+app_details=(
+    "First|$first|unknown|150|$encoded||false|false|false|||||guard_login|$(_batch_selected_app_identity "$first")|unknown||missing"
+    "Second|$second|unknown|10|||false|false|false|||||guard_login|$(_batch_selected_app_identity "$second")|unknown||missing"
+)
+success_count=0
+failed_count=0
+brew_apps_removed=0
+failed_items=()
+success_items=()
+success_dock_targets=()
+system_extension_warning_apps=()
+review_only_system_leftovers=()
+review_only_system_leftover_keys=()
+running_at_uninstall_apps=()
+total_size_freed=0
+files_cleaned=0
+total_items=0
+rc=0
+_batch_execute_removals || rc=$?
+printf 'RC=%s FREED=%s\n' "$rc" "$total_size_freed"
+[[ $rc -eq $EXPECTED_STATUS ]] || exit 1
+[[ $total_size_freed -eq $EXPECTED_FREED ]] || exit 1
+[[ -d "$HOME/retained-one" && -d "$HOME/retained-two" ]] || exit 1
+grep -Fxq -- "-skcP $HOME/retained-one $HOME/retained-two" "$HOME/du.log" || exit 1
+grep -Fxq "$first" "$HOME/removed.log" || exit 1
+if [[ $EXPECTED_STATUS -eq 0 ]]; then
+    [[ $success_count -eq 2 && $failed_count -eq 0 ]] || exit 1
+    grep -Fxq "$second" "$HOME/removed.log" || exit 1
+else
+    [[ $success_count -eq 0 && -d "$second" ]] || exit 1
+    ! grep -Fxq "$second" "$HOME/removed.log" || exit 1
+fi
+EOF
+}
+
+@test "batch leftover accounting subtracts totals even when du reports partial failure" {
+    run_leftover_accounting_case 0 0 60
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    run_leftover_accounting_case 1 0 60
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+}
+
+@test "batch leftover accounting requires an actual total row" {
+    run_leftover_accounting_case 1 0 160 no-total
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+}
+
+@test "batch leftover accounting rejects a nonnumeric total" {
+    run_leftover_accounting_case 1 0 160 invalid-total
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+}
+
+@test "batch leftover accounting rejects an unexpected du error" {
+    run_leftover_accounting_case 2 0 160 total
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+}
+
+@test "batch leftover accounting preserves timeout and signal cancellation" {
+    run_leftover_accounting_case 124 124 0
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    run_leftover_accounting_case 130 130 0
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
 }
 
 @test "batch_uninstall_applications dry-run does not report expected leftovers as failures" {
@@ -2247,10 +2355,19 @@ EOF
 }
 
 @test "stop_launch_services unloads launch agents without deleting plists" {
-    mkdir -p "$HOME/Library/LaunchAgents"
-    touch "$HOME/Library/LaunchAgents/com.example.TestApp.plist"
-    touch "$HOME/Library/LaunchAgents/com.example.TestApp.helper.plist"
+    mkdir -p "$HOME/Library/LaunchAgents" \
+        "$HOME/Applications/TestApp.app/Contents/MacOS"
+    touch "$HOME/Applications/TestApp.app/Contents/MacOS/TestApp"
+    cat > "$HOME/Library/LaunchAgents/com.example.TestApp.plist" <<PLIST
+<?xml version="1.0"?><plist version="1.0"><dict><key>Program</key><string>$HOME/Applications/TestApp.app/Contents/MacOS/TestApp</string></dict></plist>
+PLIST
     touch "$HOME/Library/LaunchAgents/com.example.TestApplication.plist"
+    cat > "$HOME/Library/LaunchAgents/com.example.TestApp.helper.plist" <<PLIST
+<?xml version="1.0"?><plist version="1.0"><dict><key>ProgramArguments</key><array><string>$HOME/Applications/TestApp.app/Contents/MacOS/TestApp</string></array></dict></plist>
+PLIST
+    cat > "$HOME/Library/LaunchAgents/com.thirdparty.TestApp-other.plist" <<PLIST
+<?xml version="1.0"?><plist version="1.0"><!-- $HOME/Applications/TestApp.app --><dict><key>Program</key><string>/bin/true</string></dict></plist>
+PLIST
 
     run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
 set -euo pipefail
@@ -2274,15 +2391,19 @@ safe_sudo_remove() {
 	return 0
 }
 
-stop_launch_services "com.example.TestApp" "false" ""
+stop_launch_services "com.example.TestApp" "false" "$HOME/Applications/TestApp.app"
 
 	grep -Fq "launchctl unload $HOME/Library/LaunchAgents/com.example.TestApp.plist" "$trace"
 	grep -Fq "launchctl unload $HOME/Library/LaunchAgents/com.example.TestApp.helper.plist" "$trace"
-	! grep -Fq "com.example.TestApplication.plist" "$trace"
-	! grep -q "safe_remove" "$trace"
+	[[ "$(grep -Fc "launchctl unload $HOME/Library/LaunchAgents/com.example.TestApp.plist" "$trace")" -eq 1 ]] || exit 1
+	[[ "$(grep -Fc "launchctl unload $HOME/Library/LaunchAgents/com.example.TestApp.helper.plist" "$trace")" -eq 1 ]] || exit 1
+	! grep -Fq "com.example.TestApplication.plist" "$trace" || exit 1
+	! grep -Fq "com.thirdparty.TestApp-other.plist" "$trace" || exit 1
+	! grep -q "safe_remove" "$trace" || exit 1
 	[[ -f "$HOME/Library/LaunchAgents/com.example.TestApp.plist" ]] || exit 1
 	[[ -f "$HOME/Library/LaunchAgents/com.example.TestApp.helper.plist" ]] || exit 1
 	[[ -f "$HOME/Library/LaunchAgents/com.example.TestApplication.plist" ]] || exit 1
+	[[ -f "$HOME/Library/LaunchAgents/com.thirdparty.TestApp-other.plist" ]] || exit 1
 EOF
 
     [ "$status" -eq 0 ]
@@ -4597,4 +4718,142 @@ INNER
     [[ "$output" != *"UNEXPECTED_DISCOVERY"* ]] || return 1
     [[ "$output" != *"UNEXPECTED_TEARDOWN"* ]] || return 1
     [[ "$output" != *"UNEXPECTED_DELETE"* ]]
+}
+
+@test "uninstall preview excludes protected leftovers before sizing and execution" {
+    mkdir -p "$HOME/Applications/ChatGPT.app" "$HOME/Library/Logs/com.openai.codex" "$HOME/eligible-leftover"
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'SCRIPT'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/uninstall/batch.sh"
+brew() { :; }
+request_sudo_access() { :; }
+start_inline_spinner() { :; }
+stop_inline_spinner() { :; }
+enter_alt_screen() { :; }
+leave_alt_screen() { :; }
+hide_cursor() { :; }
+show_cursor() { :; }
+remove_apps_from_dock() { :; }
+force_kill_app() { :; }
+stop_launch_services() { :; }
+unregister_app_bundle() { :; }
+bootout_login_item_helpers() { :; }
+pgrep() { return 1; }
+pkill() { :; }
+get_file_owner() { whoami; }
+get_path_size_kb() { echo 10; }
+calculate_total_size() { printf '%s\n' "$1" > "$HOME/sized-plan"; echo 17; }
+find_app_files() { printf '%s\n' "$HOME/Library/Logs/com.openai.codex" "$HOME/eligible-leftover"; }
+find_app_system_files() { :; }
+get_diagnostic_report_paths_for_app() {
+    [[ "$3" == "$HOME/Library/Logs/DiagnosticReports" ]] || return 0
+    printf '%s\n' "$HOME/Library/Logs/com.openai.codex"
+}
+_mole_complete_lsof_mode() { echo unexpected-lsof >> "$HOME/forbidden"; return 2; }
+validate_path_for_deletion() { echo unexpected-validation >> "$HOME/forbidden"; return 2; }
+remove_file_list() {
+    [[ -n "$1" ]] || return 0
+    printf '%s\n' "$1" >> "$HOME/executed-plan"
+    [[ "$1" == "$HOME/eligible-leftover" ]] || return 1
+    rmdir "$1"
+}
+mole_delete() { rmdir "$1"; }
+selected_apps=("0|$HOME/Applications/ChatGPT.app|ChatGPT|unknown|0|Never")
+files_cleaned=0
+total_items=0
+total_size_cleaned=0
+printf '\n' | batch_uninstall_applications > "$HOME/output.log" 2>&1
+[[ "$(cat "$HOME/sized-plan")" == "$HOME/eligible-leftover" ]] || exit 1
+[[ "$(cat "$HOME/executed-plan")" == "$HOME/eligible-leftover" ]] || exit 1
+[[ -d "$HOME/Library/Logs/com.openai.codex" ]] || exit 1
+[[ ! -e "$HOME/Applications/ChatGPT.app" && ! -e "$HOME/eligible-leftover" ]] || exit 1
+[[ ! -e "$HOME/forbidden" ]] || { cat "$HOME/forbidden"; exit 1; }
+! grep -q 'Logs/com.openai.codex' "$HOME/output.log" || exit 1
+SCRIPT
+    [ "$status" -eq 0 ] || { echo "$output"; cat "$HOME/output.log"; return 1; }
+}
+
+@test "batch uninstall explains actual refusal and clears it for the next app" {
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'SCRIPT'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/uninstall/batch.sh"
+export MOLE_UNINSTALL_MODE=1 MOLE_DELETE_MODE=trash
+export MOLE_TEST_TRASH_DIR="$HOME/Trash"
+mkdir -p "$HOME/Applications/First.app" "$HOME/Applications/Second.app" "$HOME/Library/Caches/com.example.Shared"
+shared="$HOME/Library/Caches/com.example.Shared"
+stop_launch_services() { :; }
+unregister_app_bundle() { :; }
+_mole_should_refuse_live_user_cache_path() { [[ "$1" == "$shared" && "$app_name" == First ]]; }
+_mole_is_critical_deletion_path() { [[ "$1" == "$shared" && "$app_name" == Second ]]; }
+first="$HOME/Applications/First.app"
+second="$HOME/Applications/Second.app"
+encoded=$(printf '%s\n' "$shared" | base64 | tr -d '\n')
+app_details=(
+    "First|$first|unknown|0|$encoded||false|false|false|||||guard_login|$(_batch_selected_app_identity "$first")|unknown||missing"
+    "Second|$second|unknown|0|$encoded||false|false|false|||||guard_login|$(_batch_selected_app_identity "$second")|unknown||missing"
+)
+success_count=0
+failed_count=0
+brew_apps_removed=0
+failed_items=()
+success_items=()
+success_dock_targets=()
+system_extension_warning_apps=()
+review_only_system_leftovers=()
+review_only_system_leftover_keys=()
+running_at_uninstall_apps=()
+total_size_freed=0
+files_cleaned=0
+total_items=0
+_batch_execute_removals
+[[ $success_count -eq 2 && $failed_count -eq 0 ]] || exit 1
+[[ ! -e "$first" && ! -e "$second" && -d "$shared" ]] || exit 1
+SCRIPT
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"Kept (app may be active): ~/Library/Caches/com.example.Shared"* ]] || return 1
+    [[ "$output" == *"Could not remove: ~/Library/Caches/com.example.Shared"* ]] || return 1
+}
+
+
+@test "nonprivileged batch privacy denial retains the app and offers factual next steps" {
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'SCRIPT'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/uninstall/batch.sh"
+mkdir -p "$HOME/Applications/Denied.app"
+app="$HOME/Applications/Denied.app"
+stop_launch_services() { :; }
+unregister_app_bundle() { :; }
+mole_delete() {
+    [[ "$1" == "$app" && "$2" == false ]] || return 99
+    printf 'denied\n' > "$HOME/delete-called"
+    return "$MOLE_ERR_PRIVACY_DENIED"
+}
+remove_file_list() { printf 'unexpected leftovers\n' > "$HOME/leftovers-called"; return 99; }
+app_details=("Denied|$app|unknown|0|||false|false|false|||||guard_login|$(_batch_selected_app_identity "$app")|unknown||missing")
+success_count=0
+failed_count=0
+brew_apps_removed=0
+failed_items=()
+success_items=()
+success_dock_targets=()
+system_extension_warning_apps=()
+review_only_system_leftovers=()
+review_only_system_leftover_keys=()
+running_at_uninstall_apps=()
+total_size_freed=0
+files_cleaned=0
+total_items=0
+_batch_execute_removals
+[[ $success_count -eq 0 && $failed_count -eq 1 ]] || exit 1
+[[ -d "$app" && -s "$HOME/delete-called" && ! -e "$HOME/leftovers-called" ]] || exit 1
+printf 'FAILURE=%s\n' "${failed_items[0]}"
+SCRIPT
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"macOS denied Trash access"* ]] || return 1
+    [[ "$output" == *"Try moving the item to Trash in Finder. Run with --debug for details"* ]] || return 1
+    [[ "$output" != *"check permissions"* ]] || return 1
+    [[ "$output" != *"Full Disk Access"* ]]
 }

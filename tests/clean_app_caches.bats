@@ -752,7 +752,7 @@ mkdir -p "$library/Event/Original Media/Render Files/High Quality Media"
 mkdir -p "$library/Event/Transcoded Media/High Quality Media"
 
 is_final_cut_pro_generated_cache_target "$library" "$library/Event/Render Files/High Quality Media"
-! is_final_cut_pro_generated_cache_target "$library" "$library/Event/Original Media/Render Files/High Quality Media"
+! is_final_cut_pro_generated_cache_target "$library" "$library/Event/Original Media/Render Files/High Quality Media" || exit 1
 ! is_final_cut_pro_generated_cache_target "$library" "$library/Event/Transcoded Media/High Quality Media"
 EOF
 
@@ -2930,4 +2930,27 @@ EOF
     [ "$status" -eq 0 ]
     [[ "$output" == *"CLEAN:$ext_root/remove-true"* ]] || return 1
     [[ "$output" != *"CLEAN:$ext_root/keep-"* ]] || return 1
+}
+
+@test "code editor VSIX download caches stay separate from installed extensions (#1654)" {
+    mkdir -p "$HOME/.vscode/extensions/keep-active-1654"
+    touch "$HOME/.vscode/extensions/keep-active-1654/package.json"
+    for editor in Code Cursor; do
+        mkdir -p "$HOME/Library/Application Support/$editor/CachedExtensionVSIXs"
+        mkdir -p "$HOME/Library/Application Support/$editor/User"
+        touch "$HOME/Library/Application Support/$editor/CachedExtensionVSIXs/example.vsix"
+        touch "$HOME/Library/Application Support/$editor/User/settings.json"
+    done
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/app_caches.sh"
+safe_clean() { printf 'CLEAN:%s\n' "$1"; }
+clean_code_editors
+EOF
+    [ "$status" -eq 0 ] || return 1
+    [[ "$output" == *"Code/CachedExtensionVSIXs/example.vsix"* ]] || return 1
+    [[ "$output" == *"Cursor/CachedExtensionVSIXs/example.vsix"* ]] || return 1
+    [[ "$output" != *"/User/"* ]] || return 1
+    [[ "$output" != *"/.vscode/extensions/keep-active-1654"* ]] || return 1
 }
