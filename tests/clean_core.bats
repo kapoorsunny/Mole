@@ -9,7 +9,7 @@ setup_file() {
     MOLE_TEST_MODE=1
     export MOLE_TEST_MODE
 
-    # Two tests below run the real pipeline (MOLE_TEST_MODE=0), which otherwise
+    # Full-pipeline tests below run the real pipeline (MOLE_TEST_MODE=0), which otherwise
     # scans the host: a full lsregister -dump. That cost seconds per test and
     # scaled with whatever LaunchServices happened to hold, which made this
     # file the critical path of the whole CI suite. The scan feeds no
@@ -73,7 +73,7 @@ run_clean_dry_run() {
         "$PROJECT_ROOT/mole" clean --dry-run
 }
 
-# Stub the two host toolchains the real pipeline shells out to, so what these
+# Stub the host toolchains the real pipeline shells out to, so what these
 # tests measure does not depend on the machine's Homebrew or Xcode. brew is
 # required to be mocked by project policy: no verification run may reach a real
 # package manager. xcrun follows for the same reason, and returning non-zero is
@@ -99,6 +99,16 @@ esac
 exit 0
 MOCK
 
+    cat > "$MOCK_TOOLCHAIN_BIN/go" << 'MOCK'
+#!/bin/bash
+# Shim: resolve empty fixture caches without downloading a host toolchain.
+case "$*" in
+    'env GOMODCACHE') printf '%s\n' "$HOME/go/pkg/mod" ;;
+    'env GOCACHE') printf '%s\n' "$HOME/Library/Caches/go-build" ;;
+    *) printf 'Unexpected Go command in clean fixture: %s\n' "$*" >&2; exit 99 ;;
+esac
+MOCK
+
     cat > "$MOCK_TOOLCHAIN_BIN/xcrun" << 'MOCK'
 #!/bin/bash
 # Shim: no simulator toolchain, which is the CLT-only shape clean handles.
@@ -120,7 +130,7 @@ MOCK
 printf '  PID  PPID COMM ARGS\n'
 MOCK
 
-    chmod +x "$MOCK_TOOLCHAIN_BIN/brew" "$MOCK_TOOLCHAIN_BIN/xcrun" \
+    chmod +x "$MOCK_TOOLCHAIN_BIN/brew" "$MOCK_TOOLCHAIN_BIN/go" "$MOCK_TOOLCHAIN_BIN/xcrun" \
         "$MOCK_TOOLCHAIN_BIN/lsof" "$MOCK_TOOLCHAIN_BIN/ps"
 }
 
@@ -159,6 +169,38 @@ EOF
     [[ ! -e "$base/a" ]] || return 1
     [[ ! -e "$base/b" ]] || return 1
     [[ -e "$base/keep" ]] || return 1
+
+    rm -rf "$base"
+}
+
+@test "safe_clean colors a real cleanup size by unit like the dry-run preview" {
+    local base="$HOME/safe_clean_color"
+    mkdir -p "$base"
+    /bin/dd if=/dev/zero of="$base/blob" bs=1024 count=2048 2> /dev/null
+
+    run env -u NO_COLOR HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" MOLE_TEST_MODE=1 /bin/bash --noprofile --norc << EOF
+set -euo pipefail
+source "\$PROJECT_ROOT/lib/core/common.sh"
+source "\$PROJECT_ROOT/bin/clean.sh"
+DRY_RUN=false
+files_cleaned=0
+total_size_cleaned=0
+total_items=0
+start_section_spinner() { :; }
+stop_section_spinner() { :; }
+start_inline_spinner() { :; }
+stop_inline_spinner() { :; }
+note_activity() { :; }
+safe_remove() { /bin/rm -rf "\$1"; return 0; }
+safe_clean "$base/blob" "Test cache"
+EOF
+
+    [ "$status" -eq 0 ] || return 1
+    # The success icon stays green; only the size takes its unit color.
+    [[ "$output" == *$'\033[0;32m✓\033[0m Test cache'* ]] || return 1
+    local yellow_mb=$'\033\\[0;33m[0-9.]+MB\033\\[0m'
+    [[ "$output" =~ $yellow_mb ]] || return 1
+    [[ ! -e "$base/blob" ]] || return 1
 
     rm -rf "$base"
 }
@@ -1607,11 +1649,8 @@ EOF
     touch "$HOME/Library/Mail Downloads/old.pdf"
     touch -t 202301010000 "$HOME/Library/Mail Downloads/old.pdf"
 
-    if command -v mkfile > /dev/null 2>&1; then
-        mkfile -n 6000k "$HOME/Library/Mail Downloads/dummy.dat"
-    else
-        truncate -s 6000k "$HOME/Library/Mail Downloads/dummy.dat"
-    fi
+    # The cleanup threshold uses allocated blocks; a sparse file stays below it.
+    dd if=/dev/zero of="$HOME/Library/Mail Downloads/dummy.dat" bs=1024 count=6000 2> /dev/null
 
     [ -f "$HOME/Library/Mail Downloads/old.pdf" ]
 
@@ -1619,6 +1658,7 @@ EOF
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/user.sh"
+pgrep() { return 1; }
 _clean_mail_downloads
 EOF
 
@@ -1631,14 +1671,8 @@ EOF
     touch "$HOME/Library/Mail Downloads/old.pdf"
     touch -t 202301010000 "$HOME/Library/Mail Downloads/old.pdf"
 
-    # MOLE_MAIL_DOWNLOADS_MIN_KB is readonly in base.sh, so an env override is
-    # discarded and the sweep stays below threshold. Grow the directory instead,
-    # the same way the non-dry-run case above does.
-    if command -v mkfile > /dev/null 2>&1; then
-        mkfile -n 6000k "$HOME/Library/Mail Downloads/dummy.dat"
-    else
-        truncate -s 6000k "$HOME/Library/Mail Downloads/dummy.dat"
-    fi
+    # The cleanup threshold uses allocated blocks; a sparse file stays below it.
+    dd if=/dev/zero of="$HOME/Library/Mail Downloads/dummy.dat" bs=1024 count=6000 2> /dev/null
 
     run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" DRY_RUN=true /bin/bash --noprofile --norc << 'EOF'
 set -euo pipefail

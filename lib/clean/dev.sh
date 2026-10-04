@@ -1992,9 +1992,9 @@ clean_xcode_system_coresimulator_caches() {
         local line_color
         line_color=$(cleanup_result_color_kb "$removed_size_kb")
         if [[ $skipped_count -gt 0 ]]; then
-            echo -e "  ${line_color}${ICON_SUCCESS}${NC} Xcode Simulator system cache · removed ${removed_count} (${line_color}${removed_human}${NC}), skipped ${skipped_count} protected"
+            echo -e "  ${line_color}${ICON_SUCCESS}${NC} Xcode Simulator system cache · removed ${removed_count} ($(colorize_human_size "${removed_human}")), skipped ${skipped_count} protected"
         else
-            echo -e "  ${line_color}${ICON_SUCCESS}${NC} Xcode Simulator system cache · removed ${removed_count} (${line_color}${removed_human}${NC})"
+            echo -e "  ${line_color}${ICON_SUCCESS}${NC} Xcode Simulator system cache · removed ${removed_count} ($(colorize_human_size "${removed_human}"))"
         fi
         if [[ $failed_count -gt 0 ]]; then
             echo -e "  ${GRAY}${ICON_WARNING}${NC} Xcode Simulator system cache · could not remove ${failed_count} entries"
@@ -2256,7 +2256,7 @@ clean_xcode_device_support() {
                     stale_size_human=$(bytes_to_human "$((removed_size_kb * 1024))")
                     local line_color
                     line_color=$(cleanup_result_color_kb "$removed_size_kb")
-                    echo -e "  ${line_color}${ICON_SUCCESS}${NC} ${display_name} · removed ${removed_count} old versions, ${line_color}${stale_size_human}${NC}"
+                    echo -e "  ${line_color}${ICON_SUCCESS}${NC} ${display_name} · removed ${removed_count} old versions, $(colorize_human_size "${stale_size_human}")"
                     mole_add_cleaned_row "$removed_count" "$removed_size_kb"
                     note_activity
                 fi
@@ -2789,9 +2789,9 @@ clean_dev_mobile() {
                                 local line_color
                                 line_color=$(cleanup_result_color_kb "$unavailable_size_kb")
                                 if ((removed_unavailable > 0)); then
-                                    echo -e "  ${line_color}${ICON_SUCCESS}${NC} Xcode unavailable simulators · removed ${removed_unavailable}, ${line_color}${unavailable_size_human}${NC}"
+                                    echo -e "  ${line_color}${ICON_SUCCESS}${NC} Xcode unavailable simulators · removed ${removed_unavailable}, $(colorize_human_size "${unavailable_size_human}")"
                                 else
-                                    echo -e "  ${line_color}${ICON_SUCCESS}${NC} Xcode unavailable simulators · cleanup completed, ${line_color}${unavailable_size_human}${NC}"
+                                    echo -e "  ${line_color}${ICON_SUCCESS}${NC} Xcode unavailable simulators · cleanup completed, $(colorize_human_size "${unavailable_size_human}")"
                                 fi
                             fi
                         else
@@ -2879,37 +2879,94 @@ clean_dev_jvm() {
     # Maven used to be cleaned here and relied on DEFAULT_WHITELIST_PATTERNS to
     # stay safe, which stops applying as soon as a user saves any whitelist
     # entry of their own, so the delete path is gone rather than guarded.
-    if mole_cleanup_targets_exist \
-        "$HOME/.gradle/caches/build-cache-"*/* \
-        "$HOME/.gradle/notifications"/* \
-        "$HOME/.gradle/daemon"/* \
-        "$HOME/.gradle/workers"/*; then
+    local gradle_root="$HOME/.gradle"
+    [[ -d "$gradle_root" && ! -L "$gradle_root" ]] || return 0
+    local scan_dir scan_rc=0 scan_start
+    scan_dir=$(create_temp_dir) || return 0
+    local scan_deadline=$((SECONDS + MOLE_TIMEOUT_HINT_SCAN_SEC))
+    debug_log "Starting Gradle candidate listing"
+    debug_timer_start scan_start
+    start_section_spinner "Scanning Gradle caches..."
+    # Shell globs expand before a function can show progress or enforce a
+    # deadline. Materialize this narrow listing in one bounded worker instead;
+    # a partial result never reaches a guard, preview, or deletion boundary.
+    # shellcheck disable=SC2016 # Positional arguments expand inside the worker.
+    run_with_timeout "$MOLE_TIMEOUT_HINT_SCAN_SEC" /bin/bash --noprofile --norc -c '
+        set -euo pipefail
+        root="$1"; scratch="$2"
+        if [[ -d "$root/caches" && ! -L "$root/caches" ]]; then
+            find "$root/caches" -mindepth 1 -maxdepth 1 -type d -name "build-cache-*" -print0 > "$scratch/roots"
+            while IFS= read -r -d "" cache; do
+                find "$cache" -mindepth 1 -maxdepth 1 ! -name ".*" -print0
+            done < "$scratch/roots"
+        fi
+        for name in notifications daemon workers; do
+            if [[ -d "$root/$name" && ! -L "$root/$name" ]]; then
+                find "$root/$name" -mindepth 1 -maxdepth 1 ! -name ".*" -print0
+            fi
+        done
+    ' _ "$gradle_root" "$scan_dir" > "$scan_dir/targets" 2> /dev/null < /dev/null || scan_rc=$?
+    debug_timer_end "Gradle candidate listing" scan_start
+    if [[ $scan_rc -ne 0 ]]; then
+        rm -rf "$scan_dir" # SAFE: exact mktemp-created Gradle scan scratch directory
+        debug_log "Gradle candidate listing incomplete (status $scan_rc); targets kept"
+        [[ $scan_rc -lt 128 ]] || return "$scan_rc"
+        return 0
+    fi
+
+    local -a build_targets=() notification_targets=() daemon_targets=()
+    local target
+    while IFS= read -r -d '' target; do
+        if [[ $SECONDS -ge $scan_deadline ]]; then
+            rm -rf "$scan_dir" # SAFE: exact mktemp-created Gradle scan scratch directory
+            debug_log "Gradle candidate filtering exceeded its budget; targets kept"
+            return 0
+        fi
+        mole_cleanup_targets_exist "$target" || continue
+        case "$target" in
+            "$gradle_root/caches/"*) build_targets+=("$target") ;;
+            "$gradle_root/notifications/"*) notification_targets+=("$target") ;;
+            *) daemon_targets+=("$target") ;;
+        esac
+    done < "$scan_dir/targets"
+    rm -rf "$scan_dir" # SAFE: exact mktemp-created Gradle scan scratch directory
+    debug_log "Gradle eligible targets: build=${#build_targets[@]}, notifications=${#notification_targets[@]}, daemon/workers=${#daemon_targets[@]}"
+    if [[ $((${#build_targets[@]} + ${#notification_targets[@]} + ${#daemon_targets[@]})) -gt 0 ]]; then
         local gradle_state=0
+        debug_log "Checking Gradle daemon state"
         gradle_daemon_running || gradle_state=$?
         if [[ $gradle_state -eq 0 ]]; then
             mole_defer_cleanup_family "Gradle"
         elif [[ $gradle_state -eq 1 ]]; then
             # Each group rechecks the probe at its deletion boundary; any
             # refusal stops the remaining Gradle cleanup.
-            _dev_safe_clean_process_guarded \
-                gradle_daemon_running \
-                "Gradle" \
-                "Gradle build cache" \
-                "$HOME/.gradle/caches/build-cache-"*/* \
-                "Gradle build cache" || return 0
-            _dev_safe_clean_process_guarded \
-                gradle_daemon_running \
-                "Gradle" \
-                "Gradle notifications cache" \
-                "$HOME/.gradle/notifications"/* \
-                "Gradle notifications cache" || return 0
-            _dev_safe_clean_process_guarded \
-                gradle_daemon_running \
-                "Gradle" \
-                "Gradle daemon/workers" \
-                "$HOME/.gradle/daemon"/* \
-                "$HOME/.gradle/workers"/* \
-                "Gradle daemon/workers" || return 0
+            if [[ ${#build_targets[@]} -gt 0 ]]; then
+                debug_log "Starting Gradle build cache cleanup"
+                _dev_safe_clean_process_guarded \
+                    gradle_daemon_running \
+                    "Gradle" \
+                    "Gradle build cache" \
+                    "${build_targets[@]}" \
+                    "Gradle build cache" || return 0
+            fi
+            if [[ ${#notification_targets[@]} -gt 0 ]]; then
+                debug_log "Starting Gradle notifications cleanup"
+                _dev_safe_clean_process_guarded \
+                    gradle_daemon_running \
+                    "Gradle" \
+                    "Gradle notifications cache" \
+                    "${notification_targets[@]}" \
+                    "Gradle notifications cache" || return 0
+            fi
+            if [[ ${#daemon_targets[@]} -gt 0 ]]; then
+                debug_log "Starting Gradle daemon/workers cleanup"
+                _dev_safe_clean_process_guarded \
+                    gradle_daemon_running \
+                    "Gradle" \
+                    "Gradle daemon/workers" \
+                    "${daemon_targets[@]}" \
+                    "Gradle daemon/workers" || return 0
+            fi
         else
             echo -e "  ${GRAY}${ICON_WARNING}${NC} Gradle targets · skipped (process state unknown)"
             note_activity
@@ -5302,6 +5359,7 @@ _run_developer_cleanup_step() {
     fi
 
     local step_name="${1:-developer cleanup step}"
+    debug_log "Starting developer cleanup step: $step_name"
     local _perf_step_start
     debug_timer_start _perf_step_start
     local step_rc=0

@@ -597,7 +597,7 @@ _clean_chromium_old_versions() {
         else
             local line_color
             line_color=$(cleanup_result_color_kb "$total_size")
-            echo -e "  ${line_color}${ICON_SUCCESS}${NC} ${label} old versions${NC} · ${line_color}${cleaned_count} dirs, $size_human${NC}"
+            echo -e "  ${line_color}${ICON_SUCCESS}${NC} ${label} old versions${NC} · ${line_color}${cleaned_count} dirs, $(colorize_human_size "${size_human}")"
         fi
         mole_add_cleaned_row "$cleaned_count" "$total_size"
         note_activity
@@ -858,7 +858,7 @@ clean_edge_updater_old_versions() {
         else
             local line_color
             line_color=$(cleanup_result_color_kb "$total_size")
-            echo -e "  ${line_color}${ICON_SUCCESS}${NC} Edge updater old versions${NC} · ${line_color}${cleaned_count} dirs, $size_human${NC}"
+            echo -e "  ${line_color}${ICON_SUCCESS}${NC} Edge updater old versions${NC} · ${line_color}${cleaned_count} dirs, $(colorize_human_size "${size_human}")"
         fi
         mole_add_cleaned_row "$cleaned_count" "$total_size"
         note_activity
@@ -1072,7 +1072,7 @@ clean_app_caches() {
                 size_human=$(bytes_to_human "$((total_size * 1024))")
                 local line_color
                 line_color=$(cleanup_result_color_kb "$total_size")
-                echo -e "  ${line_color}${ICON_SUCCESS}${NC} Sandboxed app caches${NC} · ${line_color}$size_human${NC}"
+                echo -e "  ${line_color}${ICON_SUCCESS}${NC} Sandboxed app caches${NC} · $(colorize_human_size "${size_human}")"
             fi
         fi
         mole_add_cleaned_row "$cleaned_count" "$total_size"
@@ -1134,7 +1134,7 @@ clean_handoff_pasteboard_cache() {
     else
         local line_color
         line_color=$(cleanup_result_color_kb "$total_kb")
-        echo -e "  ${line_color}${ICON_SUCCESS}${NC} Handoff clipboard cache${NC} · ${line_color}$size_human${NC}"
+        echo -e "  ${line_color}${ICON_SUCCESS}${NC} Handoff clipboard cache${NC} · $(colorize_human_size "${size_human}")"
     fi
     mole_add_cleaned_row "$cleaned_count" "$total_kb"
     note_activity
@@ -1427,7 +1427,7 @@ clean_group_container_caches() {
                 size_human=$(bytes_to_human "$((total_size * 1024))")
                 local line_color
                 line_color=$(cleanup_result_color_kb "$total_size")
-                echo -e "  ${line_color}${ICON_SUCCESS}${NC} Group Containers logs/caches${NC} · ${line_color}$size_human${NC}"
+                echo -e "  ${line_color}${ICON_SUCCESS}${NC} Group Containers logs/caches${NC} · $(colorize_human_size "${size_human}")"
             fi
         fi
         mole_add_cleaned_row "$cleaned_count" "$total_size"
@@ -1697,7 +1697,7 @@ clean_external_volume_target() {
         else
             local line_color
             line_color=$(cleanup_result_color_kb "$total_size")
-            echo -e "  ${line_color}${ICON_SUCCESS}${NC} External volume cleanup${NC} · ${line_color}${volume_name}, $size_human${NC}"
+            echo -e "  ${line_color}${ICON_SUCCESS}${NC} External volume cleanup${NC} · ${line_color}${volume_name}, $(colorize_human_size "${size_human}")"
         fi
         mole_add_cleaned_row "$cleaned_count" "$total_size"
         note_activity
@@ -2496,9 +2496,9 @@ clean_application_support_logs() {
             local line_color
             line_color=$(cleanup_result_color_kb "$total_size_kb")
             if [[ "$total_size_partial" == "true" ]]; then
-                echo -e "  ${line_color}${ICON_SUCCESS}${NC} Application Support logs/caches${NC} · ${line_color}at least $size_human${NC}"
+                echo -e "  ${line_color}${ICON_SUCCESS}${NC} Application Support logs/caches${NC} · ${line_color}at least $(colorize_human_size "${size_human}")"
             else
-                echo -e "  ${line_color}${ICON_SUCCESS}${NC} Application Support logs/caches${NC} · ${line_color}$size_human${NC}"
+                echo -e "  ${line_color}${ICON_SUCCESS}${NC} Application Support logs/caches${NC} · $(colorize_human_size "${size_human}")"
             fi
         fi
         mole_add_cleaned_row "$cleaned_count" "$total_size_kb"
@@ -2583,7 +2583,7 @@ clean_cached_device_firmware() {
         else
             local line_color
             line_color=$(cleanup_result_color_kb "$total_size_kb")
-            echo -e "  ${line_color}${ICON_SUCCESS}${NC} Cached device firmware${NC} · ${line_color}${cleaned_count} files, $size_human${NC}"
+            echo -e "  ${line_color}${ICON_SUCCESS}${NC} Cached device firmware${NC} · ${line_color}${cleaned_count} files, $(colorize_human_size "${size_human}")"
         fi
         mole_add_cleaned_row "$cleaned_count" "$total_size_kb"
         note_activity
@@ -2744,6 +2744,7 @@ check_large_file_candidates() {
         if [[ $du_rc -ge 128 ]]; then
             return "$du_rc"
         fi
+        [[ $du_rc -eq 0 ]] || return 1
         local size_kb="${du_output%%[^0-9]*}"
         [[ "$size_kb" =~ ^[0-9]+$ ]] || return 1
         printf '%s\n' "$size_kb"
@@ -2934,6 +2935,39 @@ check_large_file_candidates() {
     # row measures the whole folder, including the build-cache slices that
     # clean_dev_jvm resets.
     _report_large_or_stop "Gradle caches" "$HOME/.gradle/caches" || return $?
+
+    # E5RT caches stay protected. This row measures occupied space only;
+    # neither the current build nor older build subdirectories are deleted.
+    # Bound the complete listing and all measurements with one shared budget.
+    local cache_root="$HOME/Library/Caches"
+    if [[ -d "$cache_root" && ! -L "$cache_root" ]]; then
+        local compiled_list compiled_rc=0 compiled_path compiled_owner compiled_timeout
+        local compiled_deadline=$((SECONDS + MOLE_TIMEOUT_HINT_SCAN_SEC))
+        compiled_list=$(create_temp_file) || return 0
+        run_with_timeout "$MOLE_TIMEOUT_HINT_SCAN_SEC" find "$cache_root" -mindepth 1 -maxdepth 2 \
+            \( -name '.*' -prune \) -o \
+            \( -type d -name 'com.apple.e5rt.e5bundlecache' -print0 \) \
+            > "$compiled_list" 2> /dev/null < /dev/null || compiled_rc=$?
+        if [[ $compiled_rc -eq 0 ]]; then
+            while IFS= read -r -d '' compiled_path; do
+                [[ -d "$compiled_path" && ! -L "$compiled_path" && ! -L "${compiled_path%/*}" ]] || continue
+                compiled_timeout=$(_mole_timeout_with_deadline "$MOLE_TIMEOUT_HINT_SCAN_SEC" "$compiled_deadline") || break
+                compiled_owner="${compiled_path%/*}"
+                _report_large_or_stop "Compiled model cache (${compiled_owner##*/})" "$compiled_path" "$compiled_timeout" || {
+                    compiled_rc=$?
+                    break
+                }
+            done < "$compiled_list"
+        else
+            debug_log "Compiled model cache listing incomplete (status $compiled_rc); review skipped"
+        fi
+        rm -f "$compiled_list" # SAFE: exact mktemp-created compiled cache listing
+        if [[ $compiled_rc -ge 128 ]]; then
+            _mole_record_clean_cancellation "$compiled_rc"
+            stop_section_spinner
+            return "$compiled_rc"
+        fi
+    fi
 
     # Emulator images, SDK system images, downloaded models, and installed
     # runtimes are user-chosen payloads, not caches. Size is shown so the

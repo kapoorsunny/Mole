@@ -159,7 +159,7 @@ setup() {
     rm -rf "$test_cache"
 }
 
-@test "clean_service_worker_cache colors cleaned size with success color" {
+@test "clean_service_worker_cache colors cleaned size by unit" {
     local test_cache="$HOME/test_sw_cache_colored"
     mkdir -p "$test_cache/abc123_https_example.com_0"
 
@@ -189,7 +189,8 @@ EOF
 
     [ "$status" -eq 0 ]
     [[ "$output" == *"TestBrowser Service Worker"* ]] || return 1
-    [[ "$output" == *$'\033[0;32m1.0MB\033[0m'* ]] || return 1
+    [[ "$output" == *$'\033[0;32m✓\033[0m'* ]] || return 1
+    [[ "$output" == *$'\033[0;33m1.0MB\033[0m'* ]] || return 1
 
     rm -rf "$test_cache"
 }
@@ -611,6 +612,38 @@ EOF
     [[ "$output" == *"Next.js build cache|$HOME/go/src/github.com/example/demo/.next/cache/test.cache"* ]] || return 1
 
 	rm -rf "$HOME/go"
+}
+
+@test "project cache scans refill slots and keep statuses bound to original roots" {
+    run /bin/bash <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/caches.sh"
+DRY_RUN=true
+for name in root-0 root-1 root-2; do mkdir -p "$HOME/$name"; done
+discover_project_cache_roots() { printf '%s\n' "$HOME/root-0" "$HOME/root-1" "$HOME/root-2"; }
+get_optimal_parallel_jobs() { printf '2\n'; }
+scan_project_cache_root() {
+    local name="${1##*/}"
+    printf '%s\n' "$name" > "$2"
+    case "$name" in
+        root-0)
+            for _ in {1..100}; do
+                [[ ! -e "$HOME/root-2-started" ]] || return 0
+                sleep 0.02
+            done
+            return 1
+            ;;
+        root-1) return 1 ;;
+        root-2) touch "$HOME/root-2-started" ;;
+    esac
+}
+process_project_cache_matches() { printf 'PROCESSED=%s\n' "$(cat "$1")"; }
+clean_project_caches
+EOF
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'PROCESSED=root-0'* && "$output" == *'PROCESSED=root-2'* ]] || return 1
+    [[ "$output" != *'PROCESSED=root-1'* ]] || return 1
 }
 
 @test "clean_project_caches scans independent roots concurrently within its bound" {

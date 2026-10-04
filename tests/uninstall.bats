@@ -38,6 +38,221 @@ create_app_artifacts() {
     mkdir -p "$HOME/.cache/testapp"
 }
 
+assert_sibling_scan_debug_reason() {
+    local scan_status="$1" expected="$2"
+    run env HOME="$HOME/sibling-debug-$scan_status" PROJECT_ROOT="$PROJECT_ROOT" \
+        SCAN_STATUS="$scan_status" MO_DEBUG=1 /bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/uninstall/batch.sh"
+selected="$HOME/Applications/Selected.app"
+mkdir -p "$selected/Contents"
+printf '%s\n' '<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.example.shared</string></dict></plist>' > "$selected/Contents/Info.plist"
+start_inline_spinner() { :; }
+stop_inline_spinner() { :; }
+_batch_refresh_selected_app_bundle_id() { printf 'com.example.shared\n'; }
+official_uninstaller_vendor() { return 1; }
+uninstall_live_bundle_has_other_install() {
+    _MOLE_UNINSTALL_LIVE_SIBLING_FINGERPRINT="test-evidence"
+    return "$SCAN_STATUS"
+}
+pgrep() { return 1; }
+get_brew_cask_name() { return 1; }
+get_file_owner() { whoami; }
+get_path_size_kb() { printf '1\n'; }
+find_app_files() { : > "$HOME/unexpected-discovery"; return 99; }
+find_app_system_files() { : > "$HOME/unexpected-system"; return 99; }
+discover_login_item_helper_bundle_ids() { return 0; }
+calculate_total_size() { printf '0\n'; }
+has_sensitive_data() { return 1; }
+selected_apps=("0|$selected|Selected|com.example.shared|0|Never")
+running_apps=() sudo_apps=() brew_cask_apps=() blocked_apps=()
+manual_removal_apps=() app_details=() total_estimated_size=0
+_batch_scan_app_details
+[[ ${#app_details[@]} -eq 1 ]] || exit 1
+IFS='|' read -r _ stored_path stored_bundle _ stored_related _ _ _ _ _ _ _ _ stored_guard _ \
+    stored_original stored_fingerprint _ <<< "${app_details[0]}"
+[[ "$stored_path" == "$selected" && "$stored_bundle" == unknown ]] || exit 1
+[[ "$stored_guard" == guard_login && "$stored_original" == com.example.shared ]] || exit 1
+[[ "$stored_fingerprint" == "$(printf test-evidence | base64 | tr -d '\n')" && -z "$stored_related" ]] || exit 1
+[[ ! -e "$HOME/unexpected-discovery" && ! -e "$HOME/unexpected-system" && ! -e "$HOME/unexpected-login" ]] || exit 1
+printf 'BUNDLE_ONLY_PLAN\n'
+EOF
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *BUNDLE_ONLY_PLAN* ]] || return 1
+    [[ "$output" == *"$expected"* ]] || { echo "$output"; return 1; }
+    if [[ "$scan_status" != 0 ]]; then
+        [[ "$output" != *"shared with a live sibling"* ]] || return 1
+    fi
+}
+
+# Exercise the production sibling scan with real find permission failures.
+assert_time_machine_volume_scan() {
+    local status output
+    run env HOME="$HOME/time-machine" PROJECT_ROOT="$PROJECT_ROOT" \
+        SCAN_CASE="$1" EXPECTED_RC="$2" /bin/bash --noprofile --norc <<'EOF_TM'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/uninstall/batch.sh"
+if [[ "$SCAN_CASE" == bounded ]]; then
+    MO_TIMEOUT_BIN=""
+    MO_TIMEOUT_PERL_BIN="$(command -v perl)"
+    mkdir -p "$HOME/bin"
+    cat > "$HOME/bin/stat" <<'STAT'
+#!/bin/bash
+if [[ "$1" == -f && "$2" == '%u:%d' ]]; then
+    printf '0:42\n0:42\n'
+else
+    exec /usr/bin/stat "$@"
+fi
+STAT
+    chmod +x "$HOME/bin/stat"
+    export PATH="$HOME/bin:$PATH"
+else
+    run_with_timeout() { shift; "$@"; }
+fi
+pkg_receipt_nonstandard_app_paths() { :; }
+mkdir -p "$HOME/Volumes/com.apple.TimeMachine.localsnapshots" "$HOME/Selected.app"
+volumes="$HOME/Volumes"
+snapshots="$volumes/com.apple.TimeMachine.localsnapshots"
+trap 'chmod 700 "$snapshots" "$volumes/Ordinary" 2>/dev/null || true' EXIT
+# Simulate system ownership without creating root-owned fixtures or mounting disks.
+stat() {
+    if [[ "$1" == -f && "$2" == '%u:%d' ]]; then
+        case "$SCAN_CASE" in
+            mounted) printf '0:43\n0:42\n' ;;
+            user-owned) printf '501:42\n0:42\n' ;;
+            missing-metadata) return 1 ;;
+            interrupted) return 130 ;;
+            *) printf '0:42\n0:42\n' ;;
+        esac
+    else
+        /usr/bin/stat "$@"
+    fi
+}
+case "$SCAN_CASE" in
+    mounted) survivor="$snapshots/Survivor.app" ;;
+    lookalike) survivor="$volumes/com.apple.TimeMachine.localsnapshots-copy/Survivor.app" ;;
+    sibling) survivor="$volumes/External/Applications/Survivor.app" ;;
+    first-level) survivor="$volumes/Survivor.app" ;;
+    *) survivor="" ;;
+esac
+if [[ -n "$survivor" ]]; then
+    mkdir -p "$survivor/Contents"
+    printf '%s\n' '<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.example.snapshot</string></dict></plist>' > "$survivor/Contents/Info.plist"
+fi
+if [[ "$SCAN_CASE" != mounted ]]; then chmod 000 "$snapshots"; fi
+if [[ "$SCAN_CASE" == ordinary ]]; then mkdir -p "$volumes/Ordinary"; chmod 000 "$volumes/Ordinary"; fi
+_MOLE_UNINSTALL_LIVE_APP_ROOTS=()
+_MOLE_UNINSTALL_LIVE_VOLUMES_ROOT="$volumes"
+selected_apps=("0|$HOME/Selected.app|Selected|com.example.snapshot|0|Never")
+rc=0
+uninstall_live_bundle_has_other_install com.example.snapshot "$HOME/Selected.app" || rc=$?
+printf 'SCAN_CASE=%s RC=%s\n' "$SCAN_CASE" "$rc"
+[[ "$rc" -eq "$EXPECTED_RC" ]] || exit 1
+if [[ "$EXPECTED_RC" -eq 0 ]]; then
+    [[ ${#_MOLE_UNINSTALL_LIVE_SIBLING_PATHS[@]} -eq 1 && "${_MOLE_UNINSTALL_LIVE_SIBLING_PATHS[0]}" == "$survivor" ]] || exit 1
+fi
+EOF_TM
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+}
+
+assert_time_machine_batch_plan() {
+    local status output
+    run env HOME="$HOME/snapshot-plan" PROJECT_ROOT="$PROJECT_ROOT" BATCH_CASE="$1" /bin/bash --noprofile --norc <<'EOF_ROOT'
+set -euo pipefail
+export MOLE_TEST_NO_AUTH=1 TERM=dumb
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/uninstall/batch.sh"
+# Bounded helpers only invoke fixture find/plutil/stat; no authorization or sink.
+run_with_timeout() { shift; "$@"; }
+pkg_receipt_nonstandard_app_paths() { :; }
+_MOLE_UNINSTALL_LIVE_VOLUMES_ROOT="$HOME/Volumes"
+snapshots="$HOME/Volumes/com.apple.TimeMachine.localsnapshots"
+mkdir -p "$snapshots"
+chmod 000 "$snapshots"
+trap 'chmod 700 "$snapshots"' EXIT
+stat() {
+    if [[ "$1" == -f && "$2" == '%u:%d' ]]; then
+        printf '0:42\n0:42\n'
+    else
+        /usr/bin/stat "$@"
+    fi
+}
+
+export MO_DEBUG=1
+mkdir -p "$HOME/selected/Chosen.app/Contents" "$HOME/Library/Preferences"
+for app in "$HOME/selected/Chosen.app"; do
+    printf '%s\n' '<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.example.shared</string></dict></plist>' > "$app/Contents/Info.plist"
+done
+printf 'survivor data\n' > "$HOME/Library/Preferences/com.example.shared.plist"
+_MOLE_UNINSTALL_LIVE_APP_ROOTS=()
+app_path="$HOME/selected/Chosen.app"
+start_inline_spinner() { :; }
+stop_inline_spinner() { :; }
+_batch_refresh_selected_app_bundle_id() { printf 'com.example.shared\n'; }
+official_uninstaller_vendor() { return 1; }
+uninstall_bundle_id_has_surviving_sibling() { return 1; }
+pgrep() { return 1; }
+get_brew_cask_name() { return 1; }
+get_file_owner() { whoami; }
+get_path_size_kb() { printf '1\n'; }
+calculate_total_size() { printf '0\n'; }
+find_app_files() {
+    printf 'discovery\n' >> "$HOME/unexpected-discovery"
+    printf '%s\n' "$HOME/Library/Preferences/com.example.shared.plist"
+}
+find_app_system_files() { :; }
+get_diagnostic_report_paths_for_app() { :; }
+discover_login_item_helper_bundle_ids() { :; }
+has_sensitive_data() { return 1; }
+selected_apps=("0|$app_path|Chosen|com.example.shared|0|Never")
+running_apps=() sudo_apps=() brew_cask_apps=() blocked_apps=() manual_removal_apps=() app_details=() total_estimated_size=0
+_batch_scan_app_details
+[[ ${#app_details[@]} -eq 1 ]] || exit 1
+IFS='|' read -r stored_name stored_path stored_id stored_size stored_related stored_system stored_sensitive stored_sudo stored_brew stored_cask stored_diag stored_review stored_login stored_guard rest <<< "${app_details[0]}"
+printf 'PREVIEW_ID=%s GUARD=%s RELATED=%s\n' "$stored_id" "$stored_guard" "$stored_related"
+[[ "$stored_id" == com.example.shared && "$stored_guard" != guard_login && -n "$stored_related" && -z "$stored_system" ]] || exit 1
+[[ -s "$HOME/unexpected-discovery" ]] || exit 1
+if [[ "$BATCH_CASE" == new-sibling ]]; then
+    mkdir -p "$HOME/Volumes/External/Survivor.app/Contents"
+    cp "$app_path/Contents/Info.plist" "$HOME/Volumes/External/Survivor.app/Contents/Info.plist"
+fi
+# Invoke the production final installation recheck, but replace every mutation.
+stop_launch_services() { printf 'app-only teardown\n' >> "$HOME/teardown"; }
+unregister_app_bundle() { :; }
+remove_login_item() { :; }
+force_kill_app() { :; }
+bootout_login_item_helpers() { [[ -z "$1" ]] && return 0; printf 'unexpected-helper\n' >> "$HOME/forbidden"; return 99; }
+remove_file_list() {
+    [[ -z "$1" ]] && return 0
+    [[ "$BATCH_CASE" == allowed && "$1" == "$HOME/Library/Preferences/com.example.shared.plist" && "$2" == false && "$3" == com.example.shared ]] || return 99
+    printf '%s\n' "$1" >> "$HOME/leftover-sink-attempt"
+}
+mole_delete() {
+    [[ "$1" == "$HOME/selected/Chosen.app" && "$2" == false && -n "${3:-}" ]] || return 99
+    printf '%s\n' "$1" >> "$HOME/app-sink-attempt"
+    return 0
+}
+success_count=0 failed_count=0 brew_apps_removed=0 total_size_freed=0 files_cleaned=0 total_items=0
+failed_items=() success_items=() success_dock_targets=() system_extension_warning_apps=()
+review_only_system_leftovers=() review_only_system_leftover_keys=() running_at_uninstall_apps=()
+rc=0
+_batch_execute_removals || rc=$?
+printf 'FINAL_RC=%s SUCCESS=%s FAILED=%s\n' "$rc" "$success_count" "$failed_count"
+[[ $rc -eq 0 ]] || exit 1
+if [[ "$BATCH_CASE" == allowed ]]; then
+    [[ $success_count -eq 1 && $failed_count -eq 0 && -s "$HOME/app-sink-attempt" && -s "$HOME/leftover-sink-attempt" ]] || exit 1
+else
+    [[ $success_count -eq 0 && $failed_count -eq 1 && ! -e "$HOME/app-sink-attempt" && ! -e "$HOME/leftover-sink-attempt" ]] || exit 1
+fi
+[[ ! -e "$HOME/forbidden" && -f "$HOME/Library/Preferences/com.example.shared.plist" && -d "$HOME/selected/Chosen.app" ]] || exit 1
+printf 'TIME_MACHINE_PLAN_VERIFIED_WITHOUT_REAL_DELETION\n'
+EOF_ROOT
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *TIME_MACHINE_PLAN_VERIFIED_WITHOUT_REAL_DELETION* ]] || return 1
+}
+
 @test "find_app_files discovers user-level leftovers" {
     create_app_artifacts
 
@@ -979,6 +1194,46 @@ EOF
         echo "$output"
         return 1
     }
+}
+
+@test "system Time Machine snapshots do not make live sibling discovery incomplete" {
+    assert_time_machine_volume_scan system 1
+}
+
+@test "system Time Machine exclusion works through the real Perl timeout backend" {
+    assert_time_machine_volume_scan bounded 1
+}
+
+@test "Time Machine exclusion preserves real external application siblings" {
+    assert_time_machine_volume_scan sibling 0
+}
+
+@test "Time Machine exclusion does not hide similarly named external volumes" {
+    assert_time_machine_volume_scan lookalike 0
+}
+
+@test "Time Machine named mounted volumes are still scanned for siblings" {
+    assert_time_machine_volume_scan mounted 0
+}
+
+@test "unverified Time Machine ownership keeps sibling discovery unknown" {
+    assert_time_machine_volume_scan user-owned 3
+}
+
+@test "missing Time Machine metadata keeps sibling discovery unknown" {
+    assert_time_machine_volume_scan missing-metadata 3
+}
+
+@test "ordinary unreadable volumes still make sibling discovery incomplete" {
+    assert_time_machine_volume_scan ordinary 3
+}
+
+@test "Time Machine exclusion preserves depth-two volume discovery" {
+    assert_time_machine_volume_scan first-level 1
+}
+
+@test "Time Machine metadata interruption cancels sibling discovery" {
+    assert_time_machine_volume_scan interrupted 130
 }
 
 @test "live same-bundle scan covers exact package receipt apps" {
@@ -3415,7 +3670,7 @@ INNER
 }
 
 @test "main keeps scan and selector on one alternate screen until cancel (#1194)" {
-    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'INNER'
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" MO_DEBUG=1 /bin/bash --noprofile --norc << 'INNER'
 set -euo pipefail
 source "$PROJECT_ROOT/bin/uninstall.sh"
 
@@ -3465,7 +3720,8 @@ actual=$(cat "$trace_file")
 }
 INNER
 
-    [ "$status" -eq 0 ]
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"Uninstall interactive scan begin"*"Uninstall interactive scan returned"*"Uninstall inventory fingerprint begin"*"Uninstall inventory fingerprint complete"*"Uninstall list load begin"*"Uninstall list load complete"*"Uninstall input drain begin"*"Uninstall selector begin"*"Uninstall selector returned"* ]] || { echo "$output"; return 1; }
 }
 
 @test "scan_applications starts feedback before discovery and cleans no-app state" {
@@ -4856,4 +5112,449 @@ SCRIPT
     [[ "$output" == *"Try moving the item to Trash in Finder. Run with --debug for details"* ]] || return 1
     [[ "$output" != *"check permissions"* ]] || return 1
     [[ "$output" != *"Full Disk Access"* ]]
+}
+
+
+@test "batch scan debug reports a confirmed sibling without changing its protected plan" {
+    assert_sibling_scan_debug_reason 0 "shared with a live sibling"
+}
+
+@test "batch scan debug reports partial sibling evidence without claiming a sibling exists" {
+    assert_sibling_scan_debug_reason 3 "Could not rule out other copies of bundle id com.example.shared (scan exit 3)"
+}
+
+@test "batch scan debug reports failed sibling evidence without claiming a sibling exists" {
+    assert_sibling_scan_debug_reason 2 "Could not rule out other copies of bundle id com.example.shared (scan exit 2)"
+}
+
+@test "sibling scan diagnostics distinguish receipt and root failures without changing verdicts" {
+    run env HOME="$HOME/sibling-causes" PROJECT_ROOT="$PROJECT_ROOT" MO_DEBUG=1 /bin/bash --noprofile --norc <<'EOF_CAUSES'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/uninstall/batch.sh"
+mkdir -p "$HOME/Applications"
+_MOLE_UNINSTALL_LIVE_APP_ROOTS=()
+_MOLE_UNINSTALL_LIVE_VOLUMES_ROOT="$HOME/no-volumes"
+_uninstall_materialize_complete_pkg_apps() { : > "$1"; return 124; }
+rc=0
+uninstall_live_bundle_has_other_install com.example.selected "$HOME/Selected.app" || rc=$?
+[[ $rc -eq "$MOLE_UNINSTALL_SCAN_PARTIAL" ]] || exit 1
+printf 'RECEIPT_VERDICT=%s\n' "$rc"
+_uninstall_materialize_complete_pkg_apps() { : > "$1"; }
+_MOLE_UNINSTALL_LIVE_APP_ROOTS=("$HOME/Applications")
+_uninstall_materialize_complete_find0() { : > "$1"; return "$root_rc"; }
+for root_rc in 3 7; do
+    rc=0
+    uninstall_live_bundle_has_other_install com.example.selected "$HOME/Selected.app" || rc=$?
+    if [[ $root_rc -eq 3 ]]; then [[ $rc -eq 3 ]] || exit 1; else [[ $rc -eq 2 ]] || exit 1; fi
+    printf 'ROOT_VERDICT=%s\n' "$rc"
+done
+EOF_CAUSES
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"Sibling package receipt scan timed out (exit 124)"* && "$output" == *RECEIPT_VERDICT=3* ]] || return 1
+    [[ "$output" == *"Sibling application root scan incomplete (exit 3)"* && "$output" == *ROOT_VERDICT=3* ]] || return 1
+    [[ "$output" == *"Sibling application root scan failed (exit 7)"* && "$output" == *ROOT_VERDICT=2* ]] || return 1
+}
+
+@test "sibling find diagnostics retain partial stdout and sanitize the original error" {
+    run env HOME="$HOME/sibling-find-error" PROJECT_ROOT="$PROJECT_ROOT" MO_DEBUG=1 /bin/bash --noprofile --norc <<'EOF_FIND_ERROR'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/uninstall/batch.sh"
+mkdir -p "$HOME"
+scan_file=$(create_temp_file)
+run_with_timeout() {
+    printf '%s\0' "$HOME/Visible.app"
+    printf 'permission denied\033[31m\n' >&2
+    return 1
+}
+rc=0
+_uninstall_materialize_complete_find0 "$scan_file" "$((SECONDS + 5))" "$HOME" || rc=$?
+[[ $rc -eq "$MOLE_UNINSTALL_SCAN_PARTIAL" ]] || exit 1
+IFS= read -r -d '' app < "$scan_file"
+[[ "$app" == "$HOME/Visible.app" ]] || exit 1
+printf 'PARTIAL_CANDIDATE_RETAINED\n'
+EOF_FIND_ERROR
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"Sibling application listing failed (exit 1)"* && "$output" == *"permission denied"* && "$output" == *PARTIAL_CANDIDATE_RETAINED* ]] || return 1
+    [[ "$output" != *$'\033[31m'* ]] || return 1
+}
+
+@test "sibling candidate diagnostics preserve unknown and interrupted plist verdicts" {
+    run env HOME="$HOME/sibling-plist-error" PROJECT_ROOT="$PROJECT_ROOT" MO_DEBUG=1 /bin/bash --noprofile --norc <<'EOF_PLIST_ERROR'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/uninstall/batch.sh"
+app="$HOME/Other.app"
+mkdir -p "$app/Contents"
+printf 'not a plist\n' > "$app/Contents/Info.plist"
+run_with_timeout() { return "$probe_rc"; }
+for probe_rc in 1 143; do
+    rc=0
+    _uninstall_collect_live_sibling_candidate "$app" "$HOME/Selected.app" com.example.selected "$((SECONDS + 10))" false || rc=$?
+    if [[ $probe_rc -eq 1 ]]; then [[ $rc -eq 2 ]] || exit 1; else [[ $rc -eq 143 ]] || exit 1; fi
+    printf 'PLIST_VERDICT=%s\n' "$rc"
+done
+EOF_PLIST_ERROR
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"Sibling plist cannot be validated (exit 1)"* && "$output" == *PLIST_VERDICT=2* ]] || return 1
+    [[ "$output" == *"Sibling bundle ID probe incomplete (exit 143)"* && "$output" == *PLIST_VERDICT=143* ]] || return 1
+}
+
+@test "successful sibling scans stay quiet in debug refusal diagnostics" {
+    run env HOME="$HOME/sibling-complete" PROJECT_ROOT="$PROJECT_ROOT" MO_DEBUG=1 /bin/bash --noprofile --norc <<'EOF_COMPLETE'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/uninstall/batch.sh"
+pkg_receipt_nonstandard_app_paths() { :; }
+_MOLE_UNINSTALL_LIVE_APP_ROOTS=()
+_MOLE_UNINSTALL_LIVE_VOLUMES_ROOT="$HOME/no-volumes"
+rc=0
+uninstall_live_bundle_has_other_install com.example.selected "$HOME/Selected.app" || rc=$?
+[[ $rc -eq 1 ]] || exit 1
+printf 'COMPLETE_ABSENCE\n'
+EOF_COMPLETE
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *COMPLETE_ABSENCE* && "$output" != *"Sibling "* ]] || return 1
+}
+
+@test "sibling scan retains uncertainty for symlink app roots with physical controls" {
+    run env HOME="$HOME/root-scan" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF_ROOT'
+set -euo pipefail
+export MOLE_TEST_NO_AUTH=1 TERM=dumb
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/uninstall/batch.sh"
+# Bounded helpers only invoke fixture find/plutil/stat; no authorization or sink.
+run_with_timeout() { shift; "$@"; }
+pkg_receipt_nonstandard_app_paths() { :; }
+_MOLE_UNINSTALL_LIVE_VOLUMES_ROOT="$HOME/no-volumes"
+
+mkdir -p "$HOME/physical/Survivor.app/Contents" "$HOME/Selected.app/Contents"
+for app in "$HOME/physical/Survivor.app" "$HOME/Selected.app"; do
+    printf '%s\n' '<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.example.shared</string></dict></plist>' > "$app/Contents/Info.plist"
+done
+ln -s "$HOME/physical" "$HOME/Applications"
+_MOLE_UNINSTALL_LIVE_APP_ROOTS=("$HOME/Applications")
+rc=0
+uninstall_live_bundle_has_other_install com.example.shared "$HOME/Selected.app" || rc=$?
+printf 'CONFIGURED_HOME_APPLICATIONS_SYMLINK_RC=%s\n' "$rc"
+[[ $rc -eq 2 ]] || { printf 'expected unknown=2, got %s\n' "$rc" >&2; exit 1; }
+_MOLE_UNINSTALL_LIVE_APP_ROOTS=("$HOME/physical")
+rc=0
+uninstall_live_bundle_has_other_install com.example.shared "$HOME/Selected.app" || rc=$?
+printf 'PHYSICAL_POSITIVE_RC=%s\n' "$rc"
+[[ $rc -eq 0 && -n "$_MOLE_UNINSTALL_LIVE_SIBLING_FINGERPRINT" ]] || exit 1
+mkdir -p "$HOME/empty"
+_MOLE_UNINSTALL_LIVE_APP_ROOTS=("$HOME/empty")
+rc=0
+uninstall_live_bundle_has_other_install com.example.shared "$HOME/Selected.app" || rc=$?
+printf 'ORDINARY_EMPTY_ABSENCE_RC=%s\n' "$rc"
+[[ $rc -eq 1 && -z "$_MOLE_UNINSTALL_LIVE_SIBLING_FINGERPRINT" ]] || exit 1
+EOF_ROOT
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *ORDINARY_EMPTY_ABSENCE_RC=1* ]] || return 1
+}
+
+@test "symlink app roots keep shared leftovers in preview and final removal" {
+    run env HOME="$HOME/root-plan" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF_ROOT'
+set -euo pipefail
+export MOLE_TEST_NO_AUTH=1 TERM=dumb
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/uninstall/batch.sh"
+# Bounded helpers only invoke fixture find/plutil/stat; no authorization or sink.
+run_with_timeout() { shift; "$@"; }
+pkg_receipt_nonstandard_app_paths() { :; }
+_MOLE_UNINSTALL_LIVE_VOLUMES_ROOT="$HOME/no-volumes"
+
+export MO_DEBUG=1
+mkdir -p "$HOME/physical/Survivor.app/Contents" "$HOME/selected/Chosen.app/Contents" "$HOME/Library/Preferences"
+for app in "$HOME/physical/Survivor.app" "$HOME/selected/Chosen.app"; do
+    printf '%s\n' '<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.example.shared</string></dict></plist>' > "$app/Contents/Info.plist"
+done
+printf 'survivor data\n' > "$HOME/Library/Preferences/com.example.shared.plist"
+ln -s "$HOME/physical" "$HOME/Applications"
+_MOLE_UNINSTALL_LIVE_APP_ROOTS=("$HOME/Applications")
+app_path="$HOME/selected/Chosen.app"
+start_inline_spinner() { :; }
+stop_inline_spinner() { :; }
+_batch_refresh_selected_app_bundle_id() { printf 'com.example.shared\n'; }
+official_uninstaller_vendor() { return 1; }
+uninstall_bundle_id_has_surviving_sibling() { return 1; }
+pgrep() { return 1; }
+get_brew_cask_name() { return 1; }
+get_file_owner() { whoami; }
+get_path_size_kb() { printf '1\n'; }
+calculate_total_size() { printf '0\n'; }
+find_app_files() {
+    printf 'discovery\n' >> "$HOME/unexpected-discovery"
+    printf '%s\n' "$HOME/Library/Preferences/com.example.shared.plist"
+}
+find_app_system_files() { :; }
+get_diagnostic_report_paths_for_app() { :; }
+discover_login_item_helper_bundle_ids() { :; }
+has_sensitive_data() { return 1; }
+selected_apps=("0|$app_path|Chosen|com.example.shared|0|Never")
+running_apps=() sudo_apps=() brew_cask_apps=() blocked_apps=() manual_removal_apps=() app_details=() total_estimated_size=0
+_batch_scan_app_details
+[[ ${#app_details[@]} -eq 1 ]] || exit 1
+IFS='|' read -r stored_name stored_path stored_id stored_size stored_related stored_system stored_sensitive stored_sudo stored_brew stored_cask stored_diag stored_review stored_login stored_guard rest <<< "${app_details[0]}"
+printf 'PREVIEW_ID=%s GUARD=%s RELATED=%s\n' "$stored_id" "$stored_guard" "$stored_related"
+[[ "$stored_id" == unknown && "$stored_guard" == guard_login && -z "$stored_related" && -z "$stored_system" ]] || exit 1
+[[ ! -e "$HOME/unexpected-discovery" ]] || exit 1
+# Invoke the production final installation recheck, but replace every mutation.
+stop_launch_services() { printf 'app-only teardown\n' >> "$HOME/teardown"; }
+unregister_app_bundle() { :; }
+remove_login_item() { printf 'unexpected-login\n' >> "$HOME/forbidden"; return 99; }
+force_kill_app() { printf 'unexpected-kill\n' >> "$HOME/forbidden"; return 99; }
+bootout_login_item_helpers() { printf 'unexpected-helper\n' >> "$HOME/forbidden"; return 99; }
+remove_file_list() { [[ -z "$1" ]] && return 0; printf 'unexpected-leftovers\n' >> "$HOME/forbidden"; return 99; }
+mole_delete() {
+    [[ "$1" == "$HOME/selected/Chosen.app" && "$2" == false && -n "${3:-}" ]] || return 99
+    printf '%s\n' "$1" >> "$HOME/app-sink-attempt"
+    return 0
+}
+success_count=0 failed_count=0 brew_apps_removed=0 total_size_freed=0 files_cleaned=0 total_items=0
+failed_items=() success_items=() success_dock_targets=() system_extension_warning_apps=()
+review_only_system_leftovers=() review_only_system_leftover_keys=() running_at_uninstall_apps=()
+rc=0
+_batch_execute_removals || rc=$?
+printf 'FINAL_RC=%s SUCCESS=%s FAILED=%s\n' "$rc" "$success_count" "$failed_count"
+[[ $rc -eq 0 && $success_count -eq 1 && $failed_count -eq 0 ]] || exit 1
+[[ -f "$HOME/app-sink-attempt" && ! -e "$HOME/forbidden" ]] || exit 1
+[[ -f "$HOME/Library/Preferences/com.example.shared.plist" && -d "$HOME/physical/Survivor.app" && -d "$HOME/selected/Chosen.app" ]] || exit 1
+printf 'SHARED_LEFTOVERS_PRESERVED_WITHOUT_REAL_DELETION\n'
+EOF_ROOT
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *SHARED_LEFTOVERS_PRESERVED_WITHOUT_REAL_DELETION* ]] || return 1
+}
+
+@test "system Time Machine snapshots permit the same leftover plan in preview and execution" {
+    assert_time_machine_batch_plan allowed
+}
+
+@test "new external sibling after Time Machine preview prevents final removal" {
+    assert_time_machine_batch_plan new-sibling
+}
+
+@test "sibling find diagnostics show the cause after a Perl timeout preamble" {
+    run env HOME="$HOME/find-cause" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF_FIND_CAUSE'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/uninstall/batch.sh"
+mkdir -p "$HOME/bin" "$HOME/Volumes"
+cat > "$HOME/bin/find" <<'FIND'
+#!/bin/bash
+printf 'find: %s/Restricted: Permission denied\n' "$1" >&2
+exit 1
+FIND
+chmod +x "$HOME/bin/find"
+export PATH="$HOME/bin:$PATH" MO_DEBUG=1
+MO_TIMEOUT_BIN=""
+MO_TIMEOUT_PERL_BIN="$(command -v perl)"
+debug_log() { printf 'DEBUG:%s\n' "$1"; }
+result_file=$(mktemp "$HOME/result.XXXXXX")
+result=0
+_uninstall_materialize_complete_find0 "$result_file" "$((SECONDS + 5))" "$HOME/Volumes" -maxdepth 2 || result=$?
+printf 'SCAN_RC=%s\n' "$result"
+[[ "$result" -eq "$MOLE_UNINSTALL_SCAN_PARTIAL" ]] || exit 1
+EOF_FIND_CAUSE
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"SCAN_RC=3"* ]] || return 1
+    [[ "$output" == *"Sibling application listing failed (exit 1)"* ]] || return 1
+    [[ "$output" == *"Restricted: Permission denied"* ]] || { echo "$output"; return 1; }
+    [[ "$output" != *"Perl fallback"* ]] || return 1
+}
+
+
+@test "calculate_total_size accepts empty and missing-only plans on Bash 3.2" {
+    run env PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+get_path_size_kb() { echo UNEXPECTED_SIZE_PROBE; return 99; }
+[[ "$(calculate_total_size '')" == 0 ]] || exit 1
+[[ "$(calculate_total_size "$HOME/missing")" == 0 ]] || exit 1
+printf 'empty-plan-zero\n'
+EOF
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"empty-plan-zero"* ]] || return 1
+    [[ "$output" != *"UNEXPECTED_SIZE_PROBE"* ]]
+}
+
+@test "force_kill_app continues immediately after SIGTERM exits" {
+    run env PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+export MOLE_TEST_NO_AUTH=1
+source "$PROJECT_ROOT/lib/core/common.sh"
+running=1
+pgrep() { [[ "$running" == 1 ]]; }
+pkill() { running=0; }
+sleep() { echo "unexpected-wait:$*"; return 99; }
+force_kill_app MolePerfFixture || exit $?
+[[ "$running" == 0 ]] || exit 1
+printf 'exited-without-wait\n'
+EOF
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"exited-without-wait"* ]] || return 1
+    [[ "$output" != *"unexpected-wait"* ]]
+}
+
+
+@test "parallel preview preserves path order and measures each invocation fresh" {
+    run env PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/uninstall/batch.sh"
+fixture=$(mktemp -d "$HOME/preview-workers.XXXXXX")
+files=''
+for i in 1 2 3 4 5 6; do
+    touch "$fixture/$i"
+    files+="$fixture/$i"$'\n'
+done
+get_path_size_kb() {
+    printf '%s\n' "$1" >> "$fixture/calls"
+    [[ "${1##*/}" != 1 ]] || sleep 0.05
+    printf '%s\n' "$size_value"
+}
+size_value=1
+first=$(_uninstall_print_preview_paths "$files" 'row:') || exit 1
+size_value=2
+second=$(_uninstall_print_preview_paths "$files" 'row:') || exit 1
+[[ $(wc -l < "$fixture/calls") -eq 12 ]] || exit 1
+index=1
+tilde='~'
+display="${fixture/#$HOME/$tilde}"
+while IFS= read -r row; do
+    [[ "$row" == "row:$display/$index "* ]] || exit 1
+    index=$((index+1))
+done <<< "$first"
+[[ "$index" == 7 && "$first" != "$second" ]] || exit 1
+printf 'ordered-fresh-preview\n'
+EOF
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"ordered-fresh-preview"* ]]
+}
+
+@test "parallel preview drains failed workers and restores caller traps" {
+    run env PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/uninstall/batch.sh"
+fixture=$(mktemp -d "$HOME/preview-cancel.XXXXXX")
+files=''
+for i in 1 2 3 4 5 6; do touch "$fixture/$i"; files+="$fixture/$i"$'\n'; done
+create_temp_dir() { mktemp -d "$fixture/output.XXXXXX"; }
+get_path_size_kb() {
+    touch "$1.started"
+    [[ "${1##*/}" != 1 ]] || return 130
+    sleep 0.05
+    printf 'finished:%s\n' "$1" >> "$fixture/finished"
+    echo 1
+}
+trap ':' INT
+before=$(trap -p INT)
+rc=0
+_uninstall_print_preview_paths "$files" row: > "$fixture/rows" || rc=$?
+[[ $rc == 130 && "$(trap -p INT)" == "$before" ]] || exit 1
+[[ ! -s "$fixture/rows" ]] || exit 1
+[[ $(wc -l < "$fixture/finished") -eq 3 ]] || exit 1
+[[ -e "$fixture/1.started" && -e "$fixture/4.started" && ! -e "$fixture/5.started" ]] || exit 1
+[[ -z "$(find "$fixture" -type d -name 'output.*')" ]] || exit 1
+printf 'drained-and-restored\n'
+EOF
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"drained-and-restored"* ]]
+}
+
+@test "parallel preview drains a slow worker through repeated interruption" {
+    run env PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/uninstall/batch.sh"
+fixture=$(mktemp -d "$HOME/preview-signals.XXXXXX")
+files=''
+for i in 1 2 3 4 5; do touch "$fixture/$i"; files+="$fixture/$i"$'\n'; done
+create_temp_dir() { mktemp -d "$fixture/output.XXXXXX"; }
+get_path_size_kb() {
+    touch "$1.started"
+    case "${1##*/}" in
+        1) return 130 ;;
+        2) sleep 0.6 ;;
+        *) sleep 0.2 ;;
+    esac
+    printf 'finished:%s\n' "$1" >> "$fixture/finished"
+    echo 1
+}
+owner=$$
+(
+    ready=0
+    for ((tick=0; tick<200; tick++)); do
+        if [[ -f "$fixture/4.started" ]]; then ready=1; break; fi
+        sleep 0.01
+    done
+    [[ $ready == 1 ]] || exit 1
+    sleep 0.05
+    kill -TERM "$owner"
+    sleep 0.05
+    kill -TERM "$owner"
+) &
+sender=$!
+trap ':' TERM
+before=$(trap -p TERM)
+rc=0
+_uninstall_print_preview_paths "$files" row: > "$fixture/rows" || rc=$?
+wait "$sender" || exit 1
+[[ $rc == 143 && "$(trap -p TERM)" == "$before" ]] || exit 1
+[[ $(wc -l < "$fixture/finished") -eq 3 ]] || exit 1
+[[ ! -s "$fixture/rows" && ! -e "$fixture/5.started" ]] || exit 1
+[[ -z "$(find "$fixture" -type d -name 'output.*')" ]] || exit 1
+printf 'repeated-signals-drained\n'
+EOF
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"repeated-signals-drained"* ]]
+}
+
+@test "uninstall exit reclaims registered directories after interrupted allocation" {
+    local phase fixture
+    for phase in inventory preview; do
+        fixture=$(mktemp -d "$HOME/exit-cleanup.XXXXXX")
+        mkdir -p "$fixture/home" "$fixture/tmp"
+        run env HOME="$fixture/home" TMPDIR="$fixture/tmp/" PROJECT_ROOT="$PROJECT_ROOT" \
+            REVIEW_FIXTURE="$fixture" REVIEW_PHASE="$phase" /bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/bin/uninstall.sh"
+eval "$(declare -f register_temp_dir | sed '1s/register_temp_dir/_fixture_register_temp_dir/')"
+register_temp_dir() {
+    _fixture_register_temp_dir "$@"
+    printf '%s\n' "$1" > "$REVIEW_FIXTURE/allocated"
+    printf '%s\n' "$MOLE_TEMP_REGISTRY_FILE" > "$REVIEW_FIXTURE/registry"
+    sleep 0.2
+}
+is_homebrew_available() { return 0; }
+_mole_brew_prepare_batch_inventory() { echo UNEXPECTED_INVENTORY; return 97; }
+_batch_scan_app_details_impl() { :; }
+if [[ "$REVIEW_PHASE" == preview ]]; then
+    _batch_scan_app_details() { app_details=(fixture); }
+    files=''
+    for i in 1 2 3 4; do touch "$HOME/$i"; files+="$HOME/$i"$'\n'; done
+    _batch_preview_and_confirm() { _uninstall_print_preview_paths "$files" row:; }
+fi
+selected_apps=(one two)
+(
+    ready=0
+    for ((tick=0; tick<100; tick++)); do
+        if [[ -s "$REVIEW_FIXTURE/allocated" ]]; then ready=1; break; fi
+        sleep 0.005
+    done
+    [[ $ready == 1 ]] || exit 1
+    kill -TERM "$$"
+) &
+sender=$!
+rc=0
+batch_uninstall_applications || rc=$?
+wait "$sender" || exit 1
+[[ $rc == 130 ]] || exit 1
+printf 'allocation-interrupted\n'
+EOF
+        [ "$status" -eq 0 ] || { echo "$phase: $output"; return 1; }
+        [[ "$output" == *"allocation-interrupted"* && "$output" != *"UNEXPECTED_INVENTORY"* ]] || return 1
+        [[ -s "$fixture/allocated" && -s "$fixture/registry" ]] || return 1
+        [[ ! -d "$(cat "$fixture/allocated")" && ! -e "$(cat "$fixture/registry")" ]] || return 1
+    done
 }

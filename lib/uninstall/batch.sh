@@ -225,6 +225,73 @@ format_uninstall_preview_path() {
     fi
 }
 
+# Each invocation measures fresh paths and publishes rows in the reviewed order.
+# Workers only prepare display text; deletion authority is never shared here.
+_uninstall_print_preview_paths() {
+    local files="$1" prefix="$2" path text rc=0 finished="" pid index=0
+    local -a paths=() pids=()
+    while IFS= read -r path; do
+        [[ -z "$path" || ! -e "$path" ]] || paths+=("$path")
+    done <<< "$files"
+    [[ ${#paths[@]} -gt 0 ]] || return 0
+    if [[ ${#paths[@]} -le 3 ]]; then
+        for path in "${paths[@]}"; do
+            text=$(format_uninstall_preview_path "$path") || return $?
+            printf '%b%s\n' "$prefix" "$text"
+        done
+        return 0
+    fi
+    local result_dir="" old_int old_term worker_rc=0
+    result_dir=$(create_temp_dir) || return 1
+    old_int=$(trap -p INT)
+    old_term=$(trap -p TERM)
+    trap 'rc=130' INT
+    trap 'rc=143' TERM
+    for path in "${paths[@]}"; do
+        [[ $rc -eq 0 ]] || break
+        (format_uninstall_preview_path "$path" > "$result_dir/$index") < /dev/null &
+        pids+=("$!")
+        index=$((index + 1))
+        if [[ ${#pids[@]} -ge 4 ]]; then
+            worker_rc=0
+            finished=""
+            mole_wait_for_any_worker finished "${pids[@]}" || worker_rc=$?
+            [[ $rc -ne 0 || $worker_rc -eq 0 ]] || rc=$worker_rc
+            for pid in "${!pids[@]}"; do
+                [[ "${pids[$pid]}" != "$finished" ]] || unset 'pids[pid]'
+            done
+        fi
+    done
+    # Drain read-only, timeout-bounded measurements before removing their private
+    # output directory, including on interruption. No producer outlives its files.
+    for pid in "${pids[@]+"${pids[@]}"}"; do
+        while true; do
+            worker_rc=0
+            wait "$pid" 2> /dev/null || worker_rc=$?
+            [[ $rc -ne 0 || $worker_rc -eq 0 ]] || rc=$worker_rc
+            if [[ $worker_rc -lt 128 ]] || ! kill -0 "$pid" 2> /dev/null; then
+                break
+            fi
+        done
+    done
+    if [[ $rc -eq 0 ]]; then
+        for ((index = 0; index < ${#paths[@]}; index++)); do
+            if [[ ! -f "$result_dir/$index" ]]; then
+                rc=1
+                break
+            fi
+            text=$(< "$result_dir/$index")
+            printf '%b%s\n' "$prefix" "$text"
+        done
+    fi
+    rm -rf -- "$result_dir" # SAFE: private temporary worker-output directory created in this invocation
+    trap - INT TERM
+    # eval: restore the caller's signal traps captured above.
+    [[ -z "$old_int" ]] || eval "$old_int"
+    [[ -z "$old_term" ]] || eval "$old_term"
+    return "$rc"
+}
+
 discover_login_item_helper_bundle_ids() {
     local app_path="$1"
     local login_items_root="$app_path/Contents/Library/LoginItems"
@@ -798,6 +865,21 @@ _uninstall_materialize_complete_find0() {
         scan_errors=$(create_temp_file) || return 2
         run_with_timeout "$scan_timeout" find "$@" -print0 \
             < /dev/null > "$output_file" 2> "$scan_errors" || scan_rc=$?
+        if [[ "${MO_DEBUG:-0}" == "1" && $scan_rc -ne 0 ]]; then
+            local scan_error_detail=""
+            # Timeout-backend startup messages precede find's actual error.
+            # Keep the first cause line instead of reporting that preamble.
+            while IFS= read -r scan_error_detail || [[ -n "$scan_error_detail" ]]; do
+                case "$scan_error_detail" in
+                    '[TIMEOUT] Perl fallback, '* | '[TIMEOUT] Running with '* | '[TIMEOUT] Shell fallback, '*)
+                        scan_error_detail=""
+                        continue
+                        ;;
+                esac
+                [[ -z "$scan_error_detail" ]] || break
+            done < "$scan_errors"
+            debug_log "Sibling application listing failed (exit $scan_rc): $(mole_terminal_safe_text "$1"): $(mole_terminal_safe_text "${scan_error_detail:0:512}")"
+        fi
         if [[ $scan_rc -eq 1 && -s "$scan_errors" ]]; then
             # Partial view: the listing is real but not exhaustive, so it can
             # support "something is there" and never "nothing is there".
@@ -969,7 +1051,10 @@ _uninstall_collect_live_sibling_candidate() {
             fi
         done
         if [[ ! -f "$info" ]]; then
-            [[ "$missing_info_is_unknown" == true ]] && return 2
+            if [[ "$missing_info_is_unknown" == true ]]; then
+                debug_log "Sibling receipt app has no verifiable Info.plist: $(mole_terminal_safe_text "$app")"
+                return 2
+            fi
             return 1
         fi
     fi
@@ -985,7 +1070,10 @@ _uninstall_collect_live_sibling_candidate() {
             2> /dev/null) || plist_rc=$?
     fi
     if [[ $plist_rc -ne 0 || -z "$app_bundle" ]]; then
-        mole_rc_timeout_or_signal "$plist_rc" && return "$plist_rc"
+        if mole_rc_timeout_or_signal "$plist_rc"; then
+            debug_log "Sibling bundle ID probe incomplete (exit $plist_rc): $(mole_terminal_safe_text "$info")"
+            return "$plist_rc"
+        fi
         # A plist that parses and simply carries no CFBundleIdentifier is a
         # complete answer, not a failed probe: vendor uninstallers and Steam
         # launchers ship bundles like that, and one with no id cannot share an
@@ -995,12 +1083,20 @@ _uninstall_collect_live_sibling_candidate() {
         # prose. Only a file that will not parse stays unknown.
         local lint_rc=0
         local lint_timeout=""
-        if lint_timeout=$(_mole_timeout_with_deadline \
-            "$MOLE_TIMEOUT_QUICK_DETECT_SEC" "$deadline_seconds"); then
+        local lint_budget_rc=0
+        lint_timeout=$(_mole_timeout_with_deadline \
+            "$MOLE_TIMEOUT_QUICK_DETECT_SEC" "$deadline_seconds") || lint_budget_rc=$?
+        if [[ $lint_budget_rc -eq 0 ]]; then
             run_with_timeout "$lint_timeout" plutil -lint "$info" \
                 > /dev/null 2>&1 || lint_rc=$?
-            mole_rc_timeout_or_signal "$lint_rc" && return "$lint_rc"
+            if mole_rc_timeout_or_signal "$lint_rc"; then
+                debug_log "Sibling plist validation incomplete (exit $lint_rc): $(mole_terminal_safe_text "$info")"
+                return "$lint_rc"
+            fi
             [[ $lint_rc -eq 0 ]] && return 1
+            debug_log "Sibling plist cannot be validated (exit $lint_rc): $(mole_terminal_safe_text "$info")"
+        else
+            debug_log "Sibling plist validation budget exhausted (exit $lint_budget_rc): $(mole_terminal_safe_text "$info")"
         fi
         return 2
     fi
@@ -1011,7 +1107,10 @@ _uninstall_collect_live_sibling_candidate() {
     local record_rc=0
     live_record=$(_uninstall_live_sibling_record \
         "$app" "$info" "$deadline_seconds") || record_rc=$?
-    [[ $record_rc -eq 0 ]] || return "$record_rc"
+    if [[ $record_rc -ne 0 ]]; then
+        debug_log "Sibling identity snapshot failed (exit $record_rc): $(mole_terminal_safe_text "$app")"
+        return "$record_rc"
+    fi
     # shellcheck disable=SC2154 # live_paths/live_records are caller-owned snapshot arrays.
     live_paths+=("$app")
     _uninstall_insert_sorted_live_record "$live_record"
@@ -1047,6 +1146,7 @@ uninstall_live_bundle_has_other_install() {
     _uninstall_materialize_complete_pkg_apps "$pkg_paths_file" \
         "$deadline_seconds" || pkg_scan_rc=$?
     if mole_rc_timeout "$pkg_scan_rc"; then
+        debug_log "Sibling package receipt scan timed out (exit $pkg_scan_rc)"
         # Receipt enumeration walks every pkgutil receipt on the machine, and
         # a single vendor receipt can hold tens of thousands of paths, so it
         # can outlive the budget on a healthy Mac (#1340). That is the same
@@ -1054,6 +1154,7 @@ uninstall_live_bundle_has_other_install() {
         # a sibling, so carry the doubt forward instead of ending the run.
         scan_indeterminate=true
     elif [[ $pkg_scan_rc -ne 0 ]]; then
+        debug_log "Sibling package receipt scan failed (exit $pkg_scan_rc)"
         rm -f -- "$scan_file" "$pkg_paths_file" 2> /dev/null || true # SAFE: exact tracked temp files created above
         [[ $pkg_scan_rc -ge 128 ]] && return "$pkg_scan_rc"
         return 2
@@ -1071,25 +1172,55 @@ uninstall_live_bundle_has_other_install() {
             return 2
         }
         local volume_scan_rc=0
+        local snapshot_root="$_MOLE_UNINSTALL_LIVE_VOLUMES_ROOT/com.apple.TimeMachine.localsnapshots"
+        local -a volume_exclusion=()
+        if [[ -d "$snapshot_root" && ! -L "$snapshot_root" && ! -L "$_MOLE_UNINSTALL_LIVE_VOLUMES_ROOT" ]]; then
+            # Only exclude Apple's internal snapshot namespace, not a mounted
+            # disk with the same name. Unknown metadata keeps the normal scan.
+            local snapshot_metadata="" snapshot_rc=0 metadata_timeout
+            metadata_timeout=$(_mole_timeout_with_deadline "$MOLE_TIMEOUT_MEDIUM_PROBE_SEC" "$deadline_seconds") || snapshot_rc=$?
+            if [[ $snapshot_rc -eq 0 ]]; then
+                snapshot_metadata=$(run_with_timeout "$metadata_timeout" stat -f '%u:%d' \
+                    "$snapshot_root" "$_MOLE_UNINSTALL_LIVE_VOLUMES_ROOT" < /dev/null 2> /dev/null) || snapshot_rc=$?
+            fi
+            if [[ $snapshot_rc -ge 128 ]]; then
+                rm -f -- "$volume_roots_file" "$scan_file" "$pkg_paths_file" 2> /dev/null || true # SAFE: exact tracked temp files created above
+                return "$snapshot_rc"
+            fi
+            if [[ $snapshot_rc -eq 0 && "$snapshot_metadata" == *$'\n'* ]]; then
+                local snapshot_identity="${snapshot_metadata%%$'\n'*}"
+                local volume_identity="${snapshot_metadata#*$'\n'}"
+                if [[ "$snapshot_identity" == 0:* && "$volume_identity" == "$snapshot_identity" &&
+                    "${snapshot_identity#0:}" =~ ^[0-9]+$ ]]; then
+                    volume_exclusion=(-name com.apple.TimeMachine.localsnapshots -prune -o)
+                fi
+            fi
+        fi
+        # mindepth suppresses prune at depth one. Filter the completed output
+        # below instead, retaining the original depth-two candidate scope.
         _uninstall_materialize_complete_find0 "$volume_roots_file" \
             "$deadline_seconds" "$_MOLE_UNINSTALL_LIVE_VOLUMES_ROOT" \
-            -mindepth 2 -maxdepth 2 \
+            -maxdepth 2 "${volume_exclusion[@]+"${volume_exclusion[@]}"}" \
             \( \
             \( -type d -name Applications \) -o \
             \( \( -type d -o -type l \) -iname '*.app' \) \
             \) || volume_scan_rc=$?
         if [[ $volume_scan_rc -eq $MOLE_UNINSTALL_SCAN_PARTIAL ]] || mole_rc_timeout "$volume_scan_rc"; then
+            debug_log "Sibling volume discovery incomplete (exit $volume_scan_rc)"
             # Some volume was unreadable, or the budget ran out before every
             # volume was listed. Keep the roots we did see and carry the
             # doubt forward: absence can no longer be proven from here.
             scan_indeterminate=true
         elif [[ $volume_scan_rc -ne 0 ]]; then
+            debug_log "Sibling volume discovery failed (exit $volume_scan_rc)"
             rm -f -- "$volume_roots_file" "$scan_file" 2> /dev/null || true # SAFE: exact tracked temp files created above
             [[ $volume_scan_rc -ge 128 ]] && return "$volume_scan_rc"
             return 2
         fi
         local volume_root
         while IFS= read -r -d '' volume_root; do
+            local volume_relative="${volume_root#"$_MOLE_UNINSTALL_LIVE_VOLUMES_ROOT"/}"
+            [[ "$volume_relative" != "$volume_root" && "$volume_relative" == */* ]] || continue
             live_roots+=("$volume_root")
         done < "$volume_roots_file"
         rm -f -- "$volume_roots_file" 2> /dev/null || true # SAFE: exact tracked temp file created above
@@ -1100,8 +1231,16 @@ uninstall_live_bundle_has_other_install() {
     local -a live_paths=()
     local result=1
     for root in "${live_roots[@]+"${live_roots[@]}"}"; do
+        # Default find does not traverse a symlink used as its starting root.
+        # An empty listing there cannot prove that no sibling app survives.
+        if [[ -L "$root" ]]; then
+            debug_log "Sibling application root is a symlink; installation state is unknown: $(mole_terminal_safe_text "$root")"
+            result=2
+            break
+        fi
         [[ -e "$root" ]] || continue
         if [[ ! -d "$root" || ! -r "$root" ]]; then
+            debug_log "Sibling application root is not a readable directory: $(mole_terminal_safe_text "$root")"
             result=2
             break
         fi
@@ -1112,11 +1251,13 @@ uninstall_live_bundle_has_other_install() {
             "$deadline_seconds" "$root" -maxdepth 3 \
             \( -type d -o -type l \) -iname '*.app' || scan_rc=$?
         if [[ $scan_rc -eq $MOLE_UNINSTALL_SCAN_PARTIAL ]]; then
+            debug_log "Sibling application root scan incomplete (exit $scan_rc): $(mole_terminal_safe_text "$root")"
             # Unreadable subpaths under an app root. The apps this listing did
             # find are still real, so keep going and let the doubt decide the
             # verdict at the end rather than discarding the whole scan.
             scan_indeterminate=true
         elif [[ $scan_rc -ne 0 ]]; then
+            debug_log "Sibling application root scan failed (exit $scan_rc): $(mole_terminal_safe_text "$root")"
             mole_rc_timeout_or_signal "$scan_rc" && result=$scan_rc || result=2
             break
         fi
@@ -1389,9 +1530,28 @@ _batch_selected_app_plan_matches() {
 }
 
 _batch_scan_app_details() {
+    local _MOLE_BREW_BATCH_LIST_READY=0 _MOLE_BREW_BATCH_LIST="" _MOLE_BREW_BATCH_LIST_RC=0
+    local _MOLE_BREW_BATCH_ROOM_READY=0 _MOLE_BREW_BATCH_ROOM_FILE="" _MOLE_BREW_BATCH_ROOM_RC=0
+    local inventory_dir="" scan_rc=0
+    local _MOLE_UNINSTALL_DISCOVERY_DEADLINE=$((SECONDS + (2 * MOLE_TIMEOUT_DISK_VERIFY_SEC)))
+    if [[ ${#selected_apps[@]} -gt 1 ]] && is_homebrew_available; then
+        inventory_dir=$(create_temp_dir) || return 1
+        _MOLE_BREW_BATCH_ROOM_FILE="$inventory_dir/caskroom"
+        _mole_brew_prepare_batch_inventory || scan_rc=$?
+    fi
+    if [[ $scan_rc -eq 0 ]]; then
+        _batch_scan_app_details_impl || scan_rc=$?
+    fi
+    if [[ -n "$inventory_dir" ]]; then
+        rm -rf -- "$inventory_dir" # SAFE: private read-only Homebrew inventory directory created above
+    fi
+    return "$scan_rc"
+}
+
+_batch_scan_app_details_impl() {
     # All selected-app discovery shares one wall-clock budget. Individual
     # producer probes clamp themselves to this deadline.
-    local _MOLE_UNINSTALL_DISCOVERY_DEADLINE=$((SECONDS + (2 * MOLE_TIMEOUT_DISK_VERIFY_SEC)))
+    local _MOLE_UNINSTALL_DISCOVERY_DEADLINE="${_MOLE_UNINSTALL_DISCOVERY_DEADLINE:-$((SECONDS + (2 * MOLE_TIMEOUT_DISK_VERIFY_SEC)))}"
     # Cache current user outside loop
     local current_user=$(whoami)
 
@@ -1502,7 +1662,11 @@ _batch_scan_app_details() {
         if [[ "$live_sibling_present" == true ]]; then
             sibling_guard="guard_login"
             discovery_app_name=""
-            debug_log "Bundle id $bundle_id is shared with a live sibling; removing only the selected app bundle for $app_name"
+            if [[ $live_sibling_rc -eq 0 ]]; then
+                debug_log "Bundle id $bundle_id is shared with a live sibling; removing only the selected app bundle for $app_name"
+            else
+                debug_log "Could not rule out other copies of bundle id $bundle_id (scan exit $live_sibling_rc); removing only the selected app bundle for $app_name"
+            fi
             bundle_id="unknown"
         elif uninstall_bundle_id_has_surviving_sibling "$bundle_id" "$app_path"; then
             sibling_guard="guard"
@@ -1851,28 +2015,9 @@ _batch_preview_and_confirm() {
         preview_path=$(format_uninstall_preview_path "$app_path") || return $?
         echo -e "  ${GREEN}${ICON_SUCCESS}${NC} $preview_path"
 
-        # Show all related files so users can fully review before deletion.
-        while IFS= read -r file; do
-            if [[ -n "$file" && -e "$file" ]]; then
-                preview_path=$(format_uninstall_preview_path "$file") || return $?
-                echo -e "  ${GREEN}${ICON_SUCCESS}${NC} $preview_path"
-            fi
-        done <<< "$related_files"
-
-        # Show all system files so users can fully review before deletion.
-        while IFS= read -r file; do
-            if [[ -n "$file" && -e "$file" ]]; then
-                preview_path=$(format_uninstall_preview_path "$file") || return $?
-                echo -e "  ${BLUE}${ICON_WARNING}${NC} System: $preview_path"
-            fi
-        done <<< "$system_files"
-
-        while IFS= read -r file; do
-            if [[ -n "$file" && -e "$file" ]]; then
-                preview_path=$(format_uninstall_preview_path "$file") || return $?
-                echo -e "  ${YELLOW}${ICON_WARNING}${NC} Review only: $preview_path"
-            fi
-        done <<< "$review_system_display"
+        _uninstall_print_preview_paths "$related_files" "  ${GREEN}${ICON_SUCCESS}${NC} " || return $?
+        _uninstall_print_preview_paths "$system_files" "  ${BLUE}${ICON_WARNING}${NC} System: " || return $?
+        _uninstall_print_preview_paths "$review_system_display" "  ${YELLOW}${ICON_WARNING}${NC} Review only: " || return $?
     done
 
     # Confirmation before requesting sudo.
