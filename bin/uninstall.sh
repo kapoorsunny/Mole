@@ -1361,7 +1361,7 @@ _scan_finalize_index() {
     debug_log "Uninstall finalization: metadata refresh begin (elapsed ${SECONDS}s, parent $$)"
     start_uninstall_metadata_refresh "$refresh_file"
     debug_log "Uninstall finalization: metadata refresh launched (elapsed ${SECONDS}s, parent $$)"
-    stop_scan_spinner
+    stop_scan_spinner "Preparing app list..."
     debug_log "Uninstall finalization: spinner stopped (elapsed ${SECONDS}s, parent $$)"
 
     if [[ -f "${temp_file}.sorted" ]]; then
@@ -1498,7 +1498,11 @@ scan_applications() {
         spinner_pid=$!
     }
 
+    # With a final message, a shown spinner leaves that line in place on the
+    # alternate screen instead of erasing it, so the screen is not blank while
+    # the selector builds its rows. The caller animates it from there.
     stop_scan_spinner() {
+        local final_message="${1:-}"
         if [[ -n "$spinner_pid" ]]; then
             debug_log "Uninstall spinner stop begin (pid $spinner_pid, elapsed ${SECONDS}s)"
             kill -TERM "$spinner_pid" 2> /dev/null || true
@@ -1507,7 +1511,12 @@ scan_applications() {
             spinner_pid=""
         fi
         if [[ -f "$spinner_shown_file" ]]; then
-            printf "\r\033[K" >&2
+            if [[ -n "$final_message" && "${MOLE_ALT_SCREEN_ACTIVE:-}" == "1" ]]; then
+                mo_load_spinner_frames
+                printf "\r\033[K%s %s" "${MO_SPINNER_FRAMES[0]}" "$final_message" >&2
+            else
+                printf "\r\033[K" >&2
+            fi
         fi
         rm -f "$spinner_shown_file" "$scan_status_file" 2> /dev/null || true
     }
@@ -1608,6 +1617,9 @@ start_uninstall_interactive_screen() {
 }
 
 stop_uninstall_interactive_screen() {
+    # Every exit from the scan and selector passes here, so a "Preparing app
+    # list..." spinner never outlives the alternate screen.
+    stop_inline_spinner 2> /dev/null || true
     if [[ "${MOLE_ALT_SCREEN_ACTIVE:-}" == "1" ]]; then
         leave_alt_screen
     fi
@@ -1627,6 +1639,7 @@ uninstall_abort() {
 # Cleanup: restore cursor and kill keepalive.
 cleanup() {
     local exit_code="${1:-$?}"
+    trap - EXIT INT TERM
     stop_uninstall_interactive_screen
     if [[ -n "${sudo_keepalive_pid:-}" ]]; then
         kill "$sudo_keepalive_pid" 2> /dev/null || true
@@ -1810,6 +1823,20 @@ uninstall_list_apps() {
     fi
     rm -f "$apps_file" "${apps_file}.inventory" # SAFE: exact scan output and inventory sidecar
 
+    # One read-only Caskroom and `brew list --cask` snapshot serves every row
+    # instead of one probe per app. It is scoped to this listing pass only.
+    local _MOLE_BREW_BATCH_LIST_READY=0 _MOLE_BREW_BATCH_LIST="" _MOLE_BREW_BATCH_LIST_RC=0
+    local _MOLE_BREW_BATCH_ROOM_READY=0 _MOLE_BREW_BATCH_ROOM_FILE="" _MOLE_BREW_BATCH_ROOM_RC=0
+    local brew_inventory_dir="" brew_prep_rc=0
+    if is_homebrew_available && brew_inventory_dir=$(create_temp_dir); then
+        _MOLE_BREW_BATCH_ROOM_FILE="$brew_inventory_dir/caskroom"
+        _mole_brew_prepare_batch_inventory || brew_prep_rc=$?
+        if [[ $brew_prep_rc -ge 128 ]]; then
+            rm -rf -- "$brew_inventory_dir" # SAFE: private read-only Homebrew inventory directory created above
+            return "$brew_prep_rc"
+        fi
+    fi
+
     # Auto-switch to JSON when stdout is piped, matching `mo status`.
     local format="text"
     if [[ ! -t 1 ]]; then
@@ -1849,12 +1876,14 @@ uninstall_list_apps() {
             printf '\n'
         fi
         printf ']\n'
+        [[ -z "$brew_inventory_dir" ]] || rm -rf -- "$brew_inventory_dir" # SAFE: private read-only Homebrew inventory directory created above
         return 0
     fi
 
     local total=${#apps_data[@]}
     if [[ $total -eq 0 ]]; then
         echo "No applications found."
+        [[ -z "$brew_inventory_dir" ]] || rm -rf -- "$brew_inventory_dir" # SAFE: private read-only Homebrew inventory directory created above
         return 0
     fi
 
@@ -1902,6 +1931,7 @@ uninstall_list_apps() {
     done
 
     printf '\n%d application(s)  |  Remove with: mo uninstall <UNINSTALL NAME>\n\n' "$total"
+    [[ -z "$brew_inventory_dir" ]] || rm -rf -- "$brew_inventory_dir" # SAFE: private read-only Homebrew inventory directory created above
     return 0
 }
 
@@ -2069,6 +2099,12 @@ main() {
             fi
 
             debug_log "Uninstall interactive scan returned (elapsed ${SECONDS}s, parent $$)"
+            # The scan runs in a command substitution, so it can only leave a
+            # static "Preparing app list..." line. Animate that line here until
+            # the selector stops the spinner right before its first draw.
+            if [[ "${MOLE_ALT_SCREEN_ACTIVE:-}" == "1" ]]; then
+                MOLE_SPINNER_PREFIX="" start_inline_spinner "Preparing app list..."
+            fi
             cached_apps_file="$apps_file"
             debug_log "Uninstall inventory fingerprint begin (elapsed ${SECONDS}s, parent $$)"
             cached_inventory_fingerprint=$(uninstall_app_inventory_fingerprint "${apps_file}.inventory" 2> /dev/null || echo "")
@@ -2088,8 +2124,10 @@ main() {
         # Keystrokes typed during the scan/load phase must not leak into the
         # selector. A queued Enter would confirm whichever app is highlighted
         # first and drop the user straight into the destructive path. See #726.
+        # The drain flushes everything already queued, so a longer idle wait
+        # only adds blank screen before the list.
         debug_log "Uninstall input drain begin (elapsed ${SECONDS}s, parent $$)"
-        drain_pending_input 0.2
+        drain_pending_input
         debug_log "Uninstall selector begin (elapsed ${SECONDS}s, parent $$)"
 
         set +e

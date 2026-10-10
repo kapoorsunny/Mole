@@ -32,19 +32,38 @@ make_fusion_version_dir() {
 }
 
 @test "clean_xcode_tools skips derived data when Xcode running" {
-    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
+    local fixture_home="$HOME/xcode-running-derived-data"
+    run env HOME="$fixture_home" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
 set -euo pipefail
+target="$HOME/Library/Developer/Xcode/DerivedData/FixtureProject"
+mkdir -p "$target"
+touch "$target/build.bin"
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/app_caches.sh"
-    pgrep() { [[ "$1" == "-x" && "$2" == "xcodebuild" ]]; }
-safe_clean() { echo "$2"; }
+running=true
+pgrep() {
+    printf '%s\n' "$*" >> "$HOME/process-trace"
+    [[ "$running" == "true" && "$*" == "-x Xcode" ]]
+}
+safe_clean() { printf '%s\n' "$@" >> "$HOME/clean-trace"; }
+safe_remove() { printf '%s\n' "$1" >> "$HOME/clean-trace"; }
+get_path_size_kb() { printf '1\n'; }
+start_section_spinner() { :; }
+stop_section_spinner() { :; }
+note_activity() { :; }
 clean_xcode_tools
+grep -qxF -- '-x Xcode' "$HOME/process-trace" || exit 1
+[[ ! -e "$HOME/clean-trace" && -f "$target/build.bin" ]] || exit 1
+
+# The same eligible project must reach the real cleanup path once Xcode exits.
+running=false
+clean_xcode_tools
+grep -qxF "$target" "$HOME/clean-trace" || exit 1
+printf 'PASS\n'
 EOF
 
-    [ "$status" -eq 0 ]
-    [[ "$output" != *"Xcode DerivedData · skipped"* ]] || return 1
-    [[ "$output" != *"derived data"* ]] || return 1
-    [[ "$output" != *"documentation cache"* ]]
+    [ "$status" -eq 0 ] || return 1
+    [[ "$output" == *"PASS"* ]]
 }
 
 @test "clean_xcode_tools preserves device logs and user documentation stores" {
@@ -83,25 +102,37 @@ EOF
 }
 
 @test "clean_xcode_tools skips Xcode paths while xcodebuild is active" {
-    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
+    local fixture_home="$HOME/xcodebuild-running-paths"
+    run env HOME="$fixture_home" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
 set -euo pipefail
+cache="$HOME/Library/Caches/com.apple.dt.Xcode/candidate"
+product="$HOME/Library/Developer/Xcode/Products/candidate"
+mkdir -p "${cache%/*}" "${product%/*}"
+touch "$cache" "$product"
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/app_caches.sh"
-pgrep() { [[ "$2" == "xcodebuild" ]]; }
-safe_clean() {
-    case "${!#}" in
-        "Xcode cache" | "Xcode build products") echo "UNEXPECTED_XCODE_CLEAN:${!#}" ;;
-    esac
+running=true
+pgrep() {
+    printf '%s\n' "$*" >> "$HOME/process-trace"
+    [[ "$running" == "true" && "$*" == "-x xcodebuild" ]]
 }
+safe_clean() { printf '%s\n' "$@" >> "$HOME/clean-trace"; }
 clean_xcode_tools
+grep -qxF -- '-x xcodebuild' "$HOME/process-trace" || exit 1
+[[ ! -e "$HOME/clean-trace" && -f "$cache" && -f "$product" ]] || exit 1
+
+running=false
+clean_xcode_tools
+grep -qxF "$cache" "$HOME/clean-trace" || exit 1
+grep -qxF "$product" "$HOME/clean-trace" || exit 1
+printf 'PASS\n'
 EOF
 
     [ "$status" -eq 0 ] || {
         echo "$output"
         return 1
     }
-    [[ "$output" != *"Xcode cache/build products · skipped"* ]] || return 1
-    [[ "$output" != *"UNEXPECTED_XCODE_CLEAN"* ]]
+    [[ "$output" == *"PASS"* ]]
 }
 
 @test "clean_xcode_tools fails closed when process state is unknown" {
@@ -394,6 +425,40 @@ EOF
     [[ "$output" == *"comm"* ]] || return 1
     [[ "$output" == *"dingtalk"* ]] || return 1
     [[ "$output" == *"ai"* ]]
+}
+
+@test "clean_user_gui_applications restarts the spinner before every app group" {
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/app_caches.sh"
+start_section_spinner() { echo "START"; }
+stop_section_spinner() { echo "STOP"; }
+for group in clean_communication_apps clean_dingtalk clean_ai_apps clean_design_tools \
+    clean_video_tools clean_3d_tools clean_productivity_apps clean_media_players \
+    clean_video_players clean_download_managers clean_gaming_platforms \
+    clean_translation_apps clean_screenshot_tools clean_email_clients clean_task_apps \
+    clean_shell_utils clean_system_utils clean_note_apps clean_launcher_apps \
+    clean_remote_desktop; do
+    eval "$group() { echo GROUP; }"
+done
+clean_user_gui_applications
+echo "RC=$?"
+clean_download_managers() { return 130; }
+rc=0
+clean_user_gui_applications || rc=$?
+echo "CANCEL_RC=$rc"
+EOF
+
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    local first_run
+    first_run=$(printf '%s\n' "$output" | sed -n '1,/^RC=/p' | tr '\n' ' ')
+    # Twenty groups, each one preceded by its own spinner start, then one stop.
+    [ "$(printf '%s\n' "$output" | sed -n '1,/^RC=/p' | grep -c '^START$')" -eq 20 ] || { echo "$first_run"; return 1; }
+    [[ "$first_run" != *"GROUP GROUP"* ]] || { echo "$first_run"; return 1; }
+    [[ "$first_run" == *"GROUP STOP RC=0"* ]] || { echo "$first_run"; return 1; }
+    # A cancelled download-manager group still stops the spinner and returns its status.
+    [[ "$output" == *$'STOP\nCANCEL_RC=130'* ]] || { echo "$output"; return 1; }
 }
 
 @test "clean_final_cut_pro_generated_caches targets only safe generated media in Movies libraries" {

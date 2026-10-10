@@ -254,8 +254,8 @@ printf 'COUNT=%s ELAPSED_MS=%s\n' "${#normalized[@]}" "$elapsed_ms"
 printf '%s\n' "${normalized[@]}"
 
 [[ ${#normalized[@]} -eq 2 ]] || exit 1
-[[ "${normalized[0]}" == "$HOME/Library/Containers/com.microsoft.Excel/Data/Library/Caches" || "${normalized[1]}" == "$HOME/Library/Containers/com.microsoft.Excel/Data/Library/Caches" ]]
-[[ "${normalized[0]}" == "$HOME/Library/Containers/com.microsoft.Word/Data/Library/Caches" || "${normalized[1]}" == "$HOME/Library/Containers/com.microsoft.Word/Data/Library/Caches" ]]
+[[ "${normalized[0]}" == "$HOME/Library/Containers/com.microsoft.Excel/Data/Library/Caches" || "${normalized[1]}" == "$HOME/Library/Containers/com.microsoft.Excel/Data/Library/Caches" ]] || exit 1
+[[ "${normalized[0]}" == "$HOME/Library/Containers/com.microsoft.Word/Data/Library/Caches" || "${normalized[1]}" == "$HOME/Library/Containers/com.microsoft.Word/Data/Library/Caches" ]] || exit 1
 (( elapsed_ms < LIMIT_MS ))
 EOF
 
@@ -315,13 +315,36 @@ done < <(normalize_paths_for_cleanup "${paths[@]}")
 printf '%s\n' "${normalized[@]}"
 
 [[ ${#normalized[@]} -eq 2 ]] || exit 1
-[[ "${normalized[0]}" == "$HOME/.gradle/caches/8.13/groovy-dsl/abc123" || "${normalized[1]}" == "$HOME/.gradle/caches/8.13/groovy-dsl/abc123" ]]
+[[ "${normalized[0]}" == "$HOME/.gradle/caches/8.13/groovy-dsl/abc123" || "${normalized[1]}" == "$HOME/.gradle/caches/8.13/groovy-dsl/abc123" ]] || exit 1
 [[ "${normalized[0]}" == "$HOME/.gradle/caches/8.13/kotlin-dsl/def456" || "${normalized[1]}" == "$HOME/.gradle/caches/8.13/kotlin-dsl/def456" ]]
 EOF
 
     [ "$status" -eq 0 ]
 }
 
+
+@test "cleanup normalization collapses only genuine Gradle DSL hash dirs" {
+    run env PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/base.sh"
+# Load the production function without dispatching the clean entry point.
+eval "$(awk '/^normalize_paths_for_cleanup\(\)/ {on=1} on {print} on && /^}/ {exit}' "$PROJECT_ROOT/bin/clean.sh")"
+# The case glob lets "*" span slashes, so a dependency directory that merely
+# contains "groovy-dsl" deeper in the tree matches it. Only the version/dsl/hash
+# layout may collapse; anything else must stay the exact path it was given.
+deep="$HOME/.gradle/caches/modules-2/files-2.1/org.foo/groovy-dsl/1.0/x"
+genuine="$HOME/.gradle/caches/8.13/groovy-dsl/abc123/metadata.bin"
+results=()
+while IFS= read -r -d '' path; do
+    results+=("$path")
+done < <(normalize_paths_for_cleanup "$deep" "$genuine")
+printf '%s\n' "${results[@]}"
+[[ ${#results[@]} -eq 2 ]] || exit 1
+[[ "${results[0]}" == "$deep" || "${results[1]}" == "$deep" ]] || exit 1
+[[ "${results[0]}" == "$HOME/.gradle/caches/8.13/groovy-dsl/abc123" || "${results[1]}" == "$HOME/.gradle/caches/8.13/groovy-dsl/abc123" ]] || exit 1
+EOF
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+}
 
 @test "large cleanup normalization keeps parent across a prefix sibling" {
     run env PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'

@@ -103,7 +103,9 @@ select_apps_for_uninstall() {
     # Show loading for large lists (formatting can be slow due to width calculations)
     local app_count=${#apps_data[@]}
     local terminal_width=$(tput cols 2> /dev/null || echo 80)
-    if [[ $app_count -gt 100 ]]; then
+    # The uninstall scan already left a "Preparing app list..." line on its
+    # alternate screen.
+    if [[ $app_count -gt 100 && "${MOLE_ALT_SCREEN_ACTIVE:-}" != "1" ]]; then
         if [[ -t 2 ]]; then
             printf "\rPreparing %d applications...    " "$app_count" >&2
         fi
@@ -166,14 +168,15 @@ select_apps_for_uninstall() {
     local names_newline
     names_newline=$(printf '%s\n' "${names_arr[@]}")
 
-    # Clear loading message
-    if [[ $app_count -gt 100 ]]; then
+    # Clear loading message. On the uninstall alternate screen the menu header
+    # clears this line itself, so erasing it here would only blank the screen.
+    if [[ $app_count -gt 100 && "${MOLE_ALT_SCREEN_ACTIVE:-}" != "1" ]]; then
         if [[ -t 2 ]]; then
             printf "\r\033[K" >&2
         fi
     fi
 
-    drain_pending_input 0.2
+    drain_pending_input
 
     # Expose metadata for the paginated menu (optional inputs)
     # - MOLE_MENU_META_EPOCHS: numeric last_used_epoch per item
@@ -191,6 +194,12 @@ select_apps_for_uninstall() {
     fi
     export MOLE_MENU_FILTER_NAMES="$names_newline"
     export MOLE_MENU_IGNORE_INITIAL_ENTER=1
+
+    # The uninstall scan hands its "Preparing app list..." line to an inline
+    # spinner; stop it just before the menu draws over that line.
+    if declare -f stop_inline_spinner > /dev/null 2>&1; then
+        stop_inline_spinner
+    fi
 
     # Use paginated menu - result will be stored in MOLE_SELECTION_RESULT
     # Note: paginated_multi_select enters alternate screen and handles clearing

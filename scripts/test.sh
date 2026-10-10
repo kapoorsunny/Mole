@@ -150,10 +150,11 @@ prepare_go_test_helpers() {
 
 echo "1. Linting test scripts..."
 if command -v shellcheck > /dev/null 2>&1; then
+    # Concurrent Bats runs own tests/tmp-* fixtures, not lint inputs.
     TEST_FILES=()
     while IFS= read -r file; do
         TEST_FILES+=("$file")
-    done < <(find tests -type f \( -name '*.bats' -o -name '*.bash' -o -name '*.sh' \) | sort)
+    done < <(find tests -type d -path 'tests/tmp-*' -prune -o -type f \( -name '*.bats' -o -name '*.bash' -o -name '*.sh' \) -print | sort)
     if [[ ${#TEST_FILES[@]} -gt 0 ]]; then
         if shellcheck --rcfile "$PROJECT_ROOT/.shellcheckrc" "${TEST_FILES[@]}"; then
             printf "${GREEN}${ICON_SUCCESS} Test script lint passed${NC}\n"
@@ -270,6 +271,7 @@ if command -v bats > /dev/null 2>&1 && [ -d "tests" ]; then
     # Some test files include wall-clock timing assertions that are skewed by
     # CPU contention from parallel test workers. Safety/optimize fixtures also
     # use 1-2s subprocess budgets that must reach their mocked action first.
+    # The uninstall menu PTY case depends on one-second escape-sequence reads.
     # When parallel mode is active,
     # split them out to run sequentially after the parallel batch completes.
     _sequential_files=()
@@ -279,14 +281,14 @@ if command -v bats > /dev/null 2>&1 && [ -d "tests" ]; then
         if [[ ${#_all[@]} -eq 1 && -d "${_all[0]}" ]]; then
             while IFS= read -r _f; do
                 case "$_f" in
-                    *core_performance.bats | *regression.bats | *core_safe_functions.bats | *optimize.bats) _sequential_files+=("$_f") ;;
+                    *core_performance.bats | *regression.bats | *core_safe_functions.bats | *optimize.bats | *uninstall_menu.bats) _sequential_files+=("$_f") ;;
                     *) _rest+=("$_f") ;;
                 esac
             done < <(find "${_all[0]}" -type f -name '*.bats' | sort)
         else
             for _f in "${_all[@]}"; do
                 case "$_f" in
-                    *core_performance.bats | *regression.bats | *core_safe_functions.bats | *optimize.bats) _sequential_files+=("$_f") ;;
+                    *core_performance.bats | *regression.bats | *core_safe_functions.bats | *optimize.bats | *uninstall_menu.bats) _sequential_files+=("$_f") ;;
                     *) _rest+=("$_f") ;;
                 esac
             done
