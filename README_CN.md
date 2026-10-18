@@ -1,20 +1,22 @@
+<p align="right"><b>macOS</b> · <a href="https://github.com/tw93/Mole/tree/windows">Windows</a></p>
+
 <div align="center">
   <h1>Mole</h1>
   <p><b>Mac 深度清理、应用卸载、系统优化、磁盘分析与状态监控，免费开源命令行，另有原生 Mac App</b></p>
-  <p><a href="README.md">English</a> · 中文 · <a href="README_TW.md">繁體</a> · <a href="README_JA.md">日本語</a> · <a href="README_KR.md">한국어</a> · <a href="README_DE.md">Deutsch</a> · <a href="README_FR.md">Français</a></p>
+  <p><a href="README.md">English</a> · 中文 · <a href="README_TW.md">繁體</a> · <a href="README_JA.md">日本語</a> · <a href="README_KR.md">한국어</a> · <a href="README_DE.md">Deutsch</a> · <a href="README_FR.md">Français</a> · <a href="README_UA.md">Українська</a> · <a href="README_RU.md">Русский</a></p>
   <a href="https://github.com/tw93/mole/stargazers"><img src="https://img.shields.io/github/stars/tw93/mole?style=flat-square" alt="Stars"></a>
-  <a href="https://github.com/tw93/mole/releases"><img src="https://img.shields.io/github/v/tag/tw93/mole?label=version&style=flat-square" alt="Version"></a>
+  <a href="https://github.com/tw93/mole/releases"><img src="https://img.shields.io/github/v/release/tw93/mole?label=version&style=flat-square" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL_v3-blue.svg?style=flat-square" alt="License"></a>
   <a href="https://github.com/tw93/mole/commits"><img src="https://img.shields.io/github/commit-activity/m/tw93/mole?style=flat-square" alt="Commits"></a>
-  <a href="https://twitter.com/HiTw93"><img src="https://img.shields.io/badge/follow-Tw93-red?style=flat-square&logo=Twitter"></a>
-  <a href="https://t.me/+9f9gf4ZrFSQ2OWVl"><img src="https://img.shields.io/badge/chat-Telegram-blueviolet?style=flat-square&logo=Telegram"></a>
+  <a href="https://twitter.com/HiTw93"><img src="https://img.shields.io/badge/follow-Tw93-red?style=flat-square&logo=Twitter" alt="Twitter"></a>
+  <a href="https://t.me/+9f9gf4ZrFSQ2OWVl"><img src="https://img.shields.io/badge/chat-Telegram-blueviolet?style=flat-square&logo=Telegram" alt="Telegram"></a>
 </div>
 
 <p align="center">
   <img src="./docs/img/big-mole.png" alt="Mole 清理效果" width="1000" />
 </p>
 
-> 💡 这个仓库是免费开源的命令行工具（`mo`），喜欢图形界面的话可以单独下载 [Mole for Mac](https://mole.fit/)，支持删除前逐项确认、实测 800 多款软件的卸载残留、系统维护、逐层分析磁盘空间、实时状态监控，以及在支持的 Mac 上控制风扇，`brew install mole` 只会安装命令行工具。
+> 💡 这个仓库是免费开源的命令行工具（`mo`），喜欢图形界面的话可以单独下载 [Mole for Mac](https://mole.fit/)，支持删除前逐项确认、实测 800 多款软件的卸载残留、系统维护、逐层分析磁盘空间、实时状态监控，以及在支持的 Mac 上控制风扇，Windows 上对应的原生 App 是 [Mole for Windows](https://mole.fit/zh/windows)，`brew install mole` 只会安装命令行工具。
 
 ## 功能
 
@@ -22,12 +24,12 @@
 - **深度清理**：清除系统缓存、应用日志与卸载残留，释放磁盘空间
 - **应用卸载**：移除应用程序，同步清理配置文件与自启动项
 - **磁盘分析**：终端交互式浏览目录层级，定位占用空间的大文件
-- **系统优化**：刷新系统服务与缓存，优化核心数据库
+- **系统优化**：刷新 DNS、QuickLook 与图标缓存，优化系统数据库
 - **实时监控**：在终端看板中实时查看 CPU、内存、磁盘读写、网络流量与进程
 
 ## 快速开始
 
-Mole 支持 macOS 12 及更高版本，兼容 Intel 与 Apple Silicon 芯片，Homebrew 不再支持你的 macOS 版本时改用脚本安装，实验性的 Windows 版本在 [windows 分支](https://github.com/tw93/Mole/tree/windows)。
+Mole 支持 macOS 12 及更高版本，兼容 Intel 与 Apple Silicon 芯片，Homebrew 不再支持你的 macOS 版本时改用脚本安装。
 
 **通过 Homebrew 安装**
 
@@ -40,6 +42,14 @@ brew install mole
 ```bash
 curl -fsSL https://raw.githubusercontent.com/tw93/mole/main/install.sh | bash
 ```
+
+**Windows 上安装**（[Windows CLI](https://github.com/tw93/Mole/tree/windows)）
+
+```powershell
+iwr -useb https://raw.githubusercontent.com/tw93/Mole/windows/quick-install.ps1 | iex
+```
+
+Mole 只通过 Homebrew、这个 GitHub 仓库和 Mac 版、Windows 版官网 [mole.fit](https://mole.fit/) 发布，自称基于 Mole 的其他 App，或者让你往终端里粘贴一段编码命令的网站，都和 Mole 无关。
 
 **常用命令**
 
@@ -84,7 +94,7 @@ mo analyze /private/tmp      # 仅查看临时目录（不自动清理）
 <details>
 <summary><strong>其他安装选项</strong></summary>
 
-如需安装特定版本，可传入 [Releases 页面](https://github.com/tw93/mole/releases) 中的任意 Tag（带或不带前导 `V` 均可）。如需跟踪开发分支，可传入 `main`：
+想装特定版本就传入 [Releases 页面](https://github.com/tw93/mole/releases) 里的任意 Tag，带不带开头的 `V` 都行，想跟开发分支就传 `main`：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/tw93/mole/main/install.sh | bash -s -- 1.51.0
@@ -93,7 +103,7 @@ curl -fsSL https://raw.githubusercontent.com/tw93/mole/main/install.sh | bash -s
 
 `main` 会安装默认分支上还没发布的代码，可能不稳定，`latest` 只是 `main` 的旧别名，并不会安装最新稳定版。
 
-安装脚本默认安装至 `/usr/local/bin`，可能需要输入管理员密码。如果你希望以后的 `mo update` 无需密码，可以安装至用户目录：
+安装脚本默认装到 `/usr/local/bin`，可能需要输入管理员密码。希望以后的 `mo update` 不用输密码，可以装到用户目录：
 
 ```bash
 mkdir -p "$HOME/.local/bin"
@@ -101,7 +111,7 @@ curl -fsSL https://raw.githubusercontent.com/tw93/mole/main/install.sh | bash -s
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-记得将 `export PATH` 加入 `~/.zshrc` 或相应的终端配置文件。Mole 更新的是你运行的那份安装，之后会一直用这个目录，需要改系统文件的命令仍可能要管理员权限。
+记得把 `export PATH` 加到 `~/.zshrc` 或相应的终端配置文件。Mole 更新的是你运行的那份安装，之后会一直用这个目录，需要改系统文件的命令仍可能要管理员权限。
 
 **Nix**
 
@@ -113,7 +123,7 @@ nix profile upgrade mole
 nix profile remove mole
 ```
 
-声明式配置可将 `github:tw93/mole/main` 添加为 flake input，使用其 `packages.${system}.mole` 包。Nix 管理的安装要通过 Nix 升级和卸载，`mo update` 和 `mo remove` 不会改动它。
+声明式配置可以把 `github:tw93/mole/main` 加为 flake input，用它的 `packages.${system}.mole` 包。Nix 管理的安装要通过 Nix 升级和卸载，`mo update` 和 `mo remove` 不会改动它。
 
 </details>
 
@@ -123,9 +133,10 @@ Mole 会删除文件，所以会先校验路径、保护共享和系统目录，
 
 - `clean`、`uninstall`、`purge`、`installer` 与 `remove` 会删除文件，可先用 `--dry-run` 预览，需要时加上 `--debug`
 - 日常运行 **无需 `sudo`**，仅在触及系统级清理时按需请求管理员权限
-- `mo analyze` 中的删除操作在确认后默认放入 macOS 废纸篓
+- `mo uninstall` 与 `mo analyze` 在确认后默认将删除项移入废纸篓；`clean`、`purge` 与 `installer` 为永久删除，`mo uninstall --permanent` 可跳过废纸篓
 - 清理操作记录在 `~/Library/Logs/mole/operations.log` 中，可通过 `mo history` 查看，或设置 `MO_NO_OPLOG=1` 禁用
 - 可通过 `mo clean --whitelist` 保护指定缓存，或使用 `mo optimize --whitelist` 排除维护项
+- 白名单文件无法读取时，`clean`、`purge` 和 `optimize` 会直接停止，不会在没有白名单的情况下继续执行
 
 漏洞报告方式、安全边界与当前限制见 [SECURITY.md](SECURITY.md) 与 [SECURITY_AUDIT.md](SECURITY_AUDIT.md)。
 
@@ -135,7 +146,7 @@ Mole 会删除文件，所以会先校验路径、保护共享和系统目录，
 
 ### 深度清理（Clean）
 
-`mo clean` 扫描并清理已知可安全删除的缓存、日志、临时文件、开发工具缓存以及已卸载应用的残留，默认会清空废纸篓，想保留就在 `mo clean --whitelist` 里勾选 Trash，同一个菜单也用来保护想留下的缓存。选好的项会写进 `~/.config/mole/whitelist`，想加自定义路径时先打开菜单按回车保存一次，再往文件里每行追加一个路径，文件一旦存在就会替换可选默认规则，内置安全保护仍然生效。
+`mo clean` 扫描并清理已知可安全删除的缓存、日志、临时文件、开发工具缓存以及已卸载应用的残留，默认会清空 `~/.Trash`，想保留就在 `mo clean --whitelist` 里勾选 Trash，同一个菜单也用来保护想留下的缓存，各卷的废纸篓（如 `/Volumes/*/.Trashes`）不会随之清空。选好的项会写进 `~/.config/mole/whitelist`，想加自定义路径时先打开菜单按回车保存一次，再往文件里每行追加一个路径，文件一旦存在就会替换可选默认规则，内置安全保护仍然生效。
 
 ```text
 $ mo clean
@@ -171,6 +182,8 @@ Free space: 223.5GB (+4.5GB)
 
 `mo uninstall` 移除已安装的应用，以及 Mole 能确认属于这个应用的相关文件；若同一应用的另一个已安装副本仍在使用这些文件，会自动保留，应用此前已被手动删除的话，运行 `mo clean` 扫描残留。
 
+设置、插件等个人数据默认保留，在卸载预览页按 `D` 可逐项选择要删除的数据路径，卸载后若发现 shell、Hook 或 MCP 配置仍引用已删除的路径，只提示文件和行号，不修改配置。
+
 ```text
 $ mo uninstall
 
@@ -182,20 +195,24 @@ Select Apps to Remove  1/3 selected
 
 Files to be removed:
 
-✓ Photoshop 2024, 12.80GB
+✓ Photoshop 2024, 4.20GB
   ✓ /Applications/Adobe Photoshop 2024/Adobe Photoshop 2024.app
-  ✓ ~/Library/Application Support/Adobe/Adobe Photoshop 2024
-  ✓ ~/Library/Preferences/com.adobe.Photoshop.plist
+
+Personal data kept:
+  ~/Library/Application Support/Adobe/Adobe Photoshop 2024
+  ~/Library/Preferences/com.adobe.Photoshop.plist
+
+D choose personal data
 
 ======================================================================
 Uninstall complete
-Removed 1 app, freed 12.80GB: Photoshop 2024
+Removed 1 app, freed 4.20GB: Photoshop 2024
 ======================================================================
 ```
 
 ### 系统优化（Optimize）
 
-`mo optimize` 对支持的 Finder、网络、数据库与 macOS 服务执行范围明确的维护，非必要、当前执行不安全或不可用的任务会跳过并说明原因。可用 `mo optimize --whitelist` 排除任务或路径模式，例如常驻挂载的 `/Volumes/mail`，避免它被识别为卸载目标。
+`mo optimize` 对支持的 Finder、网络、数据库与 macOS 服务执行范围明确的维护，非必要、当前执行不安全或不可用的任务会跳过并说明原因。可用 `mo optimize --whitelist` 排除任务或路径模式，例如常驻挂载的 `/Volumes/mail`，避免它出现在推出列表里。
 
 ```text
 $ mo optimize
@@ -207,30 +224,29 @@ Optimize
 PERFORMANCE DIAGNOSIS
   ✓ No sustained high-CPU bottleneck detected
 
-➤ DNS & Spotlight Check
-  → DNS cache flushed
-  → Spotlight index verified
-
 ➤ Finder Cache Refresh
   → QuickLook thumbnails refreshed
   → Icon services cache rebuilt
+
+➤ Network Cache Refresh
+  → DNS cache refreshed
 
 ➤ Database Optimization
   ◎ Close these apps before database optimization: Safari
 
 ➤ Disk Health
-  → Disk verify skipped (set MOLE_ENABLE_DISK_VERIFY=1 to enable)
+  → Disk verify skipped
 
 ======================================================================
 Optimization Complete
-Applied 3 optimizations
-14 unchanged | 3 skipped | 1 unavailable
+Applied 2 optimizations
+13 unchanged | 3 skipped | 1 unavailable
 ======================================================================
 ```
 
 ### 磁盘分析（Analyze）
 
-`mo analyze` 打开终端交互式磁盘分析器，支持方向键与 Vim 快捷键浏览、快速过滤、多选标记、Finder 预览与移入废纸篓。外置磁盘默认不在概览中显示，可运行 `mo analyze /Volumes` 或指定挂载路径单独查看，`mo analyze /private/tmp` 只检查临时目录，不会把它们变成自动清理目标。
+`mo analyze` 打开终端交互式磁盘分析器，支持方向键与 Vim 快捷键浏览、快速过滤、多选标记、Finder 预览与移入废纸篓。外置磁盘默认不在概览中显示，可运行 `mo analyze /Volumes` 或指定挂载路径单独查看，`mo analyze /private/tmp` 只检查临时目录，不会把它们变成自动清理目标。逐文件扫描时，共享全部数据块的 APFS 克隆只计一次，文件夹快速估算仍可能重复计算共享块。
 
 以 `+` 结尾的大小是部分扫描里实际测到的字节数，`unknown` 表示没法测出大小。因临时超时中断的条目不会覆盖已有完整缓存，后续刷新可自动补全。macOS 不允许终端读取的文件夹会一直标为部分扫描，直到访问权限改变。终端界面只列出最大的 30 项，读不到的条目可能不在这 30 项里，但总量仍会标为部分扫描，JSON 格式输出则包含所有扫描条目。
 
@@ -287,9 +303,23 @@ Proxy   HTTP · 192.168.1.100             Chrome     ▮▮▮▯▯  28.3%
 - `mo status --json`：单次输出系统状态快照 JSON
 - `mo status | jq '.health_score'`：当输出被管道重定向时自动切换为 JSON 模式
 - `mo status --watch --interval 2s`：持续流式输出 NDJSON（换行分隔的 JSON）
-- `mo history --json`：以 JSON 格式输出历史清理日志。每个会话带有 `run_id`（不透明字符串，没有记录身份时为空）和 `attribution`，能识别的运行是 `run`，旧版按命令分组的是 `command`，旧标记分不清中断和重叠运行时是 `ambiguous`。记录下来的操作仍然都能看到，但 `ambiguous` 的计数没法可靠地分到单次运行上。`ended_at` 为空表示没有记录到结束标记。
+- `mo history --json`：以 JSON 格式输出历史清理日志。每个会话带有 `run_id`（不透明字符串，没有记录身份时为空）和 `attribution`，能识别的运行是 `run`，旧版按命令分组的是 `command`，旧标记分不清中断和重叠运行时是 `ambiguous`。记录下来的操作仍然都能看到，但 `ambiguous` 的计数没法可靠地分到单次运行上。`ended_at` 为空表示没有记录到结束标记
 
 ```text
+$ mo analyze --json ~/Documents
+{
+  "path": "/Users/you/Documents",
+  "overview": false,
+  "entries": [
+    { "name": "Library", "path": "...", "size": 80939438080, "is_dir": true }
+  ],
+  "large_files": [
+    { "name": "backup.zip", "path": "...", "size": 8796093022 }
+  ],
+  "total_size": 168393441280,
+  "total_files": 42187
+}
+
 $ mo status --json
 {
   "host": "MacBook-Pro",
@@ -312,7 +342,7 @@ $ mo status --json
 
 如果某个指标采集出错，`mo status --json` 仍会输出其他可用指标，将错误记录在 stderr 中并退出 0，`--watch` 也是这样继续输出，只有 CPU、内存、磁盘和进程指标全都拿不到，或者 JSON 输出失败时才退出 1。
 
-支持对持续高 CPU 占用的进程进行提示，可通过 `--proc-cpu-threshold`、`--proc-cpu-window` 或 `--proc-cpu-alerts=false` 进行调整或关闭。
+持续高 CPU 的进程会有提示，用 `--proc-cpu-threshold`、`--proc-cpu-window` 或 `--proc-cpu-alerts=false` 调整或关闭。
 
 </details>
 
@@ -399,9 +429,9 @@ Removed 5 installers, freed 3.83GB
 curl -fsSL https://raw.githubusercontent.com/tw93/Mole/main/scripts/setup-quick-launchers.sh | bash
 ```
 
-该脚本会自动添加 Raycast 命令；若检测到 Alfred 配置，还会同步添加带有 `clean`、`uninstall`、`optimize`、`analyze` 与 `status` 关键词的 Alfred Workflow。
+脚本会添加 Raycast 命令，检测到 Alfred 配置时还会添加带有 `clean`、`uninstall`、`optimize`、`analyze` 与 `status` 关键词的 Alfred Workflow。
 
-Raycast 安装后需一次性手动设置：
+Raycast 装好后要手动设置一次：
 
 1. 打开 **Raycast 设置 > Extensions > Script Commands**。
 2. 添加 `~/Library/Application Support/Raycast/script-commands` 目录。

@@ -31,7 +31,9 @@ import (
 // permission denials can be cached and still reads as partial.
 // v6: deletions invalidate ancestor totals and overview measurements.
 // v7: Library overview totals count cross-directory hardlinks once again.
-const cacheSchemaVersion = 7
+// v8: APFS clones that share every block count once, so v7 totals can be inflated.
+// v9: mixed clone/hardlink groups deduplicate together; bounded lists use path ties.
+const cacheSchemaVersion = 9
 
 type overviewSizeSnapshot struct {
 	Size          int64     `json:"size"`
@@ -636,9 +638,7 @@ func loadCacheFromDisk(path string) (*cacheEntry, error) {
 	// loadStaleCacheFromDisk and refreshes behind it, and the rescan reuses the
 	// unchanged subtrees below, so refusing costs one level, not a full scan.
 	if info.ModTime().After(entry.ModTime) {
-		if cacheModTimeGrace <= 0 || info.ModTime().Sub(entry.ModTime) > cacheModTimeGrace {
-			return nil, fmt.Errorf("cache expired: directory modified")
-		}
+		return nil, fmt.Errorf("cache expired: directory modified")
 	}
 
 	return entry, nil

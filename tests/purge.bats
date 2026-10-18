@@ -1366,6 +1366,7 @@ EOF
 		/bin/bash --noprofile --norc <<'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/clean/project.sh"
+_MOLE_PURGE_FIND=find  # route the purge walk through the stub
 
 scan_status=0
 MO_USE_FIND=1 scan_purge_targets "$HOME/www" "$SCAN_OUTPUT" || scan_status=$?
@@ -1404,6 +1405,7 @@ EOF
 		/bin/bash --noprofile --norc <<'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/clean/project.sh"
+_MOLE_PURGE_FIND=find  # route the purge walk through the stub
 
 scan_status=0
 MO_USE_FIND=1 scan_purge_targets "$HOME/www" "$SCAN_OUTPUT" || scan_status=$?
@@ -1772,6 +1774,7 @@ EOF
 	run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash <<'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/clean/project.sh"
+_MOLE_PURGE_FIND=find  # route the purge walk through the stub
 mkdir -p "$HOME/probe/project/node_modules" "$HOME/.cache/mole"
 touch "$HOME/probe/project/package.json"
 fd() { :; }
@@ -3492,7 +3495,7 @@ printf generated > "$root/repo/Svc/other/build/out.txt"
 git init -q "$root/repo"
 git -C "$root/repo" add Svc/app/build/source.txt
 # A plain mv leaves the index with the old spelling and git status clean.
-mv "$root/repo/Svc" "$root/repo/svc"
+/bin/mv "$root/repo/Svc" "$root/repo/svc"
 is_protected_purge_artifact "$root/repo/svc/app/build" || exit 11
 # An untracked sibling under the same folder is still disposable.
 if is_protected_purge_artifact "$root/repo/svc/other/build"; then exit 12; fi
@@ -4471,4 +4474,164 @@ EOF
         [ "$status" -eq 0 ] || { echo "$phase: $output"; failures=$((failures + 1)); }
     done
     [ "$failures" -eq 0 ]
+}
+
+@test "scan_purge_targets still walks when find rejects the dataless flag name" {
+	# An older macOS find that does not know `dataless` fails the whole walk
+	# with the flag in it. The probe must turn the prune off instead.
+	local root="$HOME/dataless-probe"
+	mkdir -p "$root/app/node_modules"
+	touch "$root/app/package.json"
+
+	local scan_output
+	scan_output="$(mktemp)"
+
+	run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" ROOT="$root" SCAN_OUTPUT="$scan_output" \
+		/bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/clean/project.sh"
+_MOLE_PURGE_FIND=find  # route the purge walk through the stub
+run_with_timeout() { shift; "$@"; }
+fd() { return 1; }
+find() {
+	local arg
+	for arg in "$@"; do
+		if [[ "$arg" == "-flags" ]]; then
+			echo "FLAG_SEEN" >> "$HOME/walk.log"
+			echo "find: -flags: dataless: illegal flag name" >&2
+			return 1
+		fi
+	done
+	/usr/bin/find "$@"
+}
+scan_purge_targets "$ROOT" "$SCAN_OUTPUT"
+cat "$SCAN_OUTPUT"
+echo "WALK_LOG:$(cat "$HOME/walk.log")"
+EOF
+
+	rm -f "$scan_output" "$HOME/walk.log"
+	rm -rf "$root"
+	[ "$status" -eq 0 ] || { echo "$output"; return 1; }
+	[[ "$output" == *"$root/app/node_modules"* ]] || return 1
+	[[ "$output" == *"WALK_LOG:FLAG_SEEN"* ]] || return 1
+	[[ "$output" != *"WALK_LOG:FLAG_SEEN"*"FLAG_SEEN"* ]]
+}
+
+@test "scan_purge_targets skips online-only cloud folders and never uses fd for a cloud root (#1679)" {
+	local cloud="$HOME/Library/CloudStorage/GoogleDrive-test"
+	mkdir -p "$cloud/Local/app/node_modules" "$cloud/OnlineOnly/app/node_modules"
+	touch "$cloud/Local/app/package.json" "$cloud/OnlineOnly/app/package.json"
+
+	local scan_output
+	scan_output="$(mktemp)"
+
+	run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" CLOUD="$cloud" SCAN_OUTPUT="$scan_output" \
+		/bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/clean/project.sh"
+_MOLE_PURGE_FIND=find  # route the purge walk through the stub
+run_with_timeout() { shift; "$@"; }
+fd() { echo "FD_USED" >> "$HOME/walk.log"; return 1; }
+# A real dataless flag needs a File Provider, so the stub stands in for it with
+# a name match and records that every walk asked for the flag.
+find() {
+	local -a args=()
+	local saw_flag=false
+	while [[ $# -gt 0 ]]; do
+		if [[ "$1" == "-flags" && "${2:-}" == "+dataless" ]]; then
+			args+=(-name OnlineOnly)
+			saw_flag=true
+			shift 2
+			continue
+		fi
+		args+=("$1")
+		shift
+	done
+	[[ "${args[0]}" != "$CLOUD" ]] || echo "WALK_DATALESS=$saw_flag" >> "$HOME/walk.log"
+	/usr/bin/find "${args[@]}"
+}
+scan_purge_targets "$CLOUD" "$SCAN_OUTPUT"
+cat "$SCAN_OUTPUT"
+cat "$HOME/walk.log"
+EOF
+
+	rm -f "$scan_output" "$HOME/walk.log"
+	rm -rf "$HOME/Library/CloudStorage"
+	[ "$status" -eq 0 ] || { echo "$output"; return 1; }
+	[[ "$output" == *"$cloud/Local/app/node_modules"* ]] || return 1
+	[[ "$output" != *"OnlineOnly/app/node_modules"* ]] || return 1
+	[[ "$output" == *"WALK_DATALESS=true"* ]] || return 1
+	[[ "$output" != *"WALK_DATALESS=false"* ]] || return 1
+	[[ "$output" != *"FD_USED"* ]]
+}
+
+@test "purge keeps the dataless prune with GNU find first in PATH" {
+	# GNU findutils has no -flags primary, so a PATH find would always answer
+	# "unknown" and the walk would list online-only cloud folders. The probe
+	# and both walks use the system find instead.
+	local root="$HOME/gnu-find-purge"
+	local stub_bin="$HOME/gnu-find-bin"
+	mkdir -p "$root/app/node_modules" "$stub_bin"
+	touch "$root/app/package.json"
+	cat > "$stub_bin/find" <<'STUB'
+#!/bin/bash
+echo "PATH_FIND $*" >> "$HOME/gnu-find.log"
+for arg in "$@"; do
+	[[ "$arg" == "-flags" ]] && { echo "find: unknown predicate '-flags'" >&2; exit 1; }
+done
+exec /usr/bin/find "$@"
+STUB
+	chmod +x "$stub_bin/find"
+
+	local scan_output
+	scan_output="$(mktemp)"
+	run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" PATH="$stub_bin:$PATH" ROOT="$root" SCAN_OUTPUT="$scan_output" \
+		/bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/clean/project.sh"
+run_with_timeout() { shift; "$@"; }
+fd() { return 1; }
+rc=0
+_purge_find_knows_dataless || rc=$?
+echo "DATALESS_RC=$rc"
+scan_purge_targets "$ROOT" "$SCAN_OUTPUT"
+cat "$SCAN_OUTPUT"
+EOF
+
+	local path_find_calls=""
+	path_find_calls=$(cat "$HOME/gnu-find.log" 2> /dev/null || true)
+	rm -f "$scan_output" "$HOME/gnu-find.log"
+	rm -rf "$root" "$stub_bin"
+	[ "$status" -eq 0 ] || { echo "$output"; return 1; }
+	[[ "$output" == *"DATALESS_RC=0"* ]] || { echo "$output"; return 1; }
+	[[ "$output" == *"$root/app/node_modules"* ]] || { echo "$output"; return 1; }
+	[[ "$path_find_calls" != *"-flags"* ]] || { echo "$path_find_calls"; return 1; }
+	[[ "$path_find_calls" != *"$root -mindepth"* ]] || { echo "$path_find_calls"; return 1; }
+}
+
+@test "dataless capability signals cancel discovery before any candidate is published" {
+    local signal
+    for signal in 130 143; do
+        run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" SIGNAL="$signal" /bin/bash --noprofile --norc <<'SH'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/clean/project.sh"
+_MOLE_PURGE_FIND=find  # route the purge walk through the stub
+mkdir -p "$HOME/.cache/mole" "$HOME/projects/app/node_modules"
+touch "$HOME/projects/app/package.json"
+run_with_timeout() { shift; "$@"; }
+fd() { return 1; }
+find() {
+    local arg
+    for arg in "$@"; do
+        if [[ "$arg" == -flags ]]; then return "$SIGNAL"; fi
+    done
+    /usr/bin/find "$@"
+}
+rc=0
+scan_purge_targets "$HOME/projects" "$HOME/result" || rc=$?
+[[ $rc -eq $SIGNAL ]] || exit 1
+[[ ! -s "$HOME/result" ]] || exit 1
+SH
+        [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    done
 }

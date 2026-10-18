@@ -1,9 +1,11 @@
+<p align="right"><b>macOS</b> · <a href="https://github.com/tw93/Mole/tree/windows">Windows</a></p>
+
 <div align="center">
   <h1>Mole</h1>
   <p><b>Mac 심층 정리, 앱 제거, 시스템 최적화, 디스크 분석 및 상태 모니터링. 무료 오픈소스 CLI와 네이티브 Mac 앱.</b></p>
-  <p><a href="README.md">English</a> · <a href="README_CN.md">中文</a> · <a href="README_TW.md">繁體</a> · <a href="README_JA.md">日本語</a> · 한국어 · <a href="README_DE.md">Deutsch</a> · <a href="README_FR.md">Français</a></p>
+  <p><a href="README.md">English</a> · <a href="README_CN.md">中文</a> · <a href="README_TW.md">繁體</a> · <a href="README_JA.md">日本語</a> · 한국어 · <a href="README_DE.md">Deutsch</a> · <a href="README_FR.md">Français</a> · <a href="README_UA.md">Українська</a> · <a href="README_RU.md">Русский</a></p>
   <a href="https://github.com/tw93/mole/stargazers"><img src="https://img.shields.io/github/stars/tw93/mole?style=flat-square" alt="Stars"></a>
-  <a href="https://github.com/tw93/mole/releases"><img src="https://img.shields.io/github/v/tag/tw93/mole?label=version&style=flat-square" alt="Version"></a>
+  <a href="https://github.com/tw93/mole/releases"><img src="https://img.shields.io/github/v/release/tw93/mole?label=version&style=flat-square" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL_v3-blue.svg?style=flat-square" alt="License"></a>
   <a href="https://github.com/tw93/mole/commits"><img src="https://img.shields.io/github/commit-activity/m/tw93/mole?style=flat-square" alt="Commits"></a>
   <a href="https://twitter.com/HiTw93"><img src="https://img.shields.io/badge/follow-Tw93-red?style=flat-square&logo=Twitter" alt="Twitter"></a>
@@ -14,12 +16,12 @@
   <img src="./docs/img/big-mole.png" alt="Mole 정리 결과" width="1000" />
 </p>
 
-> 💡 이 저장소는 무료 오픈소스 CLI(`mo`)입니다. 네이티브 앱을 원한다면 [Mole for Mac](https://mole.fit/)을 별도로 내려받을 수 있습니다. 삭제 전 항목별 확인, 800개 이상 앱에서 테스트한 잔여 파일 정리, 유지보수, 디스크 단계별 분석, 실시간 상태 확인, 지원되는 Mac에서의 팬 제어를 제공합니다. `brew install mole`은 CLI만 설치합니다.
+> 💡 이 저장소는 무료 오픈소스 CLI(`mo`)입니다. 네이티브 앱을 원한다면 [Mole for Mac](https://mole.fit/)을 별도로 내려받을 수 있습니다. 삭제 전 항목별 확인, 800개 이상 앱에서 테스트한 잔여 파일 정리, 유지보수, 디스크 단계별 분석, 실시간 상태 확인, 지원되는 Mac에서의 팬 제어를 제공합니다. Windows용 네이티브 앱은 [Mole for Windows](https://mole.fit/ko/windows)입니다. `brew install mole`은 CLI만 설치합니다.
 
 ## 주요 기능
 
 - **올인원 CLI 툴킷**: CleanMyMac, AppCleaner, DaisyDisk, iStat Menus 스타일의 워크플로를 하나의 터미널 명령으로 통합
-- **심층 정리**: 캐시, 로그, 잔여물 및 삭제된 앱이 남긴 데이터를 안전하게 제거하여 디스크 공간 확보
+- **심층 정리**: 캐시, 로그, 잔여물 및 삭제된 앱이 남긴 데이터를 제거하여 디스크 공간 확보
 - **스마트 앱 제거**: 앱과 함께 연결된 LaunchAgents, 환경설정, 잔여 파일을 정리
 - **디스크 분석기**: 인터랙티브 TUI로 디스크 사용량을 시각화하고 대용량 파일 탐색
 - **시스템 최적화**: DNS 플러시, QuickLook 및 아이콘 캐시 재구축, 핵심 시스템 데이터베이스 최적화
@@ -27,7 +29,7 @@
 
 ## 빠른 시작
 
-Mole은 macOS 12 이상을 지원하며, Intel 및 Apple Silicon Mac 모두에서 동작합니다. 현재 macOS 버전에서 Homebrew 설치가 어려우면 설치 스크립트를 사용하고, 실험적인 Windows 버전은 [windows 브랜치](https://github.com/tw93/Mole/tree/windows)에서 확인할 수 있습니다.
+Mole은 macOS 12 이상을 지원하며, Intel 및 Apple Silicon Mac 모두에서 동작합니다. 현재 macOS 버전에서 Homebrew 설치가 어려우면 설치 스크립트를 사용하세요.
 
 **Homebrew로 설치**
 
@@ -40,6 +42,14 @@ brew install mole
 ```bash
 curl -fsSL https://raw.githubusercontent.com/tw93/mole/main/install.sh | bash
 ```
+
+**Windows에서 설치** ([Windows CLI](https://github.com/tw93/Mole/tree/windows))
+
+```powershell
+iwr -useb https://raw.githubusercontent.com/tw93/Mole/windows/quick-install.ps1 | iex
+```
+
+Mole은 Homebrew, 이 GitHub 저장소, Mac 앱과 Windows 앱용 [mole.fit](https://mole.fit/)에서만 배포됩니다. "Mole 기반"이라고 소개하는 다른 앱이나 인코딩된 명령을 터미널에 붙여 넣으라고 하는 사이트는 Mole과 관련이 없습니다.
 
 **주요 명령어**
 
@@ -91,7 +101,7 @@ curl -fsSL https://raw.githubusercontent.com/tw93/mole/main/install.sh | bash -s
 curl -fsSL https://raw.githubusercontent.com/tw93/mole/main/install.sh | bash -s -- main
 ```
 
-`main`은 메인 브랜치의 미출시 최신 코드를 설치합니다. `latest`는 과거의 별칭이며 최신 안정 릴리스를 의미하지 않습니다.
+`main`은 메인 브랜치의 미출시 최신 코드를 설치하므로 다듬어지지 않은 부분이 있을 수 있습니다. `latest`는 과거의 별칭이며 최신 안정 릴리스를 의미하지 않습니다.
 
 설치 스크립트는 기본적으로 `/usr/local/bin`에 설치되며 관리자 암호를 요청할 수 있습니다. 암호 입력 없이 `mo update`를 진행하려면 사용자 홈 디렉터리에 설치할 수 있습니다:
 
@@ -123,19 +133,20 @@ Mole은 파일을 삭제할 수 있으므로 경로를 검증하고, 공유 위�
 
 - `clean`, `uninstall`, `purge`, `installer`, `remove` 명령은 파일을 삭제하므로 먼저 `--dry-run`으로 확인하고 필요 시 `--debug`를 함께 사용하세요
 - 일상적인 Mole 실행에는 **`sudo`가 필요하지 않으며**, 시스템 수준의 정리 작업에만 관리자 권한을 요청합니다
-- `mo analyze`에서 선택한 항목은 확인 후 macOS 휴지통으로 이동됩니다
+- `mo uninstall`과 `mo analyze`는 확인 후 삭제 항목을 기본적으로 휴지통으로 이동합니다. `clean`, `purge`, `installer`는 영구 삭제하며, `mo uninstall --permanent`는 휴지통을 거치지 않습니다
 - 정리 내역은 `~/Library/Logs/mole/operations.log`에 기록되며, `mo history`로 확인하거나 `MO_NO_OPLOG=1`로 비활성화할 수 있습니다
 - `mo clean --whitelist`로 보존할 캐시를 지정하거나 `mo optimize --whitelist`로 제외할 유지보수 작업을 관리하세요
+- 화이트리스트 파일을 읽을 수 없으면 `clean`, `purge`, `optimize`는 이를 무시하고 실행하지 않고 중단합니다
 
 취약점 신고 방법, 안전 경계, 현재 한계는 [SECURITY.md](SECURITY.md) 및 [SECURITY_AUDIT.md](SECURITY_AUDIT.md)를 참고하세요.
 
 ## 세부 기능 안내
 
-아래 예시는 축약된 화면입니다. 실제 표시 항목과 용량은 사용 중인 Mac 환경에 따라 다릅니다.
+아래 예시는 축약된 화면입니다. 실제 표시 항목, 용량, 건너뛴 이유는 사용 중인 Mac 환경에 따라 다릅니다.
 
 ### 심층 정리 (Clean)
 
-`mo clean`은 안전한 캐시, 로그, 임시 파일, 개발 도구 캐시 및 이미 삭제된 앱의 잔여 파일을 검사하고 정리하며, 기본적으로 휴지통을 비웁니다. 휴지통을 유지하려면 `mo clean --whitelist`에서 Trash를 선택하세요. 같은 메뉴에서 보존할 캐시도 지정할 수 있고, 선택한 항목은 `~/.config/mole/whitelist`에 저장됩니다. 직접 경로를 추가하려면 먼저 메뉴를 열고 Enter를 눌러 선택 항목을 저장한 뒤, 한 줄에 하나씩 경로를 추가하세요. 이 파일이 있으면 선택적 기본 규칙을 대체하며, 내장 안전 보호는 계속 적용됩니다.
+`mo clean`은 안전한 캐시, 로그, 임시 파일, 개발 도구 캐시 및 이미 삭제된 앱의 잔여 파일을 검사하고 정리하며, 기본적으로 `~/.Trash`를 비웁니다. 휴지통을 유지하려면 `mo clean --whitelist`에서 Trash를 선택하세요. 같은 메뉴에서 보존할 캐시도 지정할 수 있고, `/Volumes/*/.Trashes` 같은 볼륨 휴지통은 함께 비워지지 않습니다. 선택한 항목은 `~/.config/mole/whitelist`에 저장됩니다. 직접 경로를 추가하려면 먼저 메뉴를 열고 Enter를 눌러 선택 항목을 저장한 뒤, 한 줄에 하나씩 경로를 추가하세요. 이 파일이 있으면 선택적 기본 규칙을 대체하며, 내장 안전 보호는 계속 적용됩니다.
 
 ```text
 $ mo clean
@@ -169,7 +180,9 @@ Free space: 223.5GB (+4.5GB)
 
 ### 앱 제거 (Uninstall)
 
-`mo uninstall`은 설치된 앱과 함께 Mole이 해당 앱의 것으로 확인할 수 있는 관련 파일을 제거합니다. 같은 앱의 다른 설치본이 아직 사용하는 공유 파일은 보존됩니다. 이미 휴지통으로 지운 앱의 경우 `mo clean`을 실행하여 남은 잔여물을 찾으세요.
+`mo uninstall`은 설치된 앱과 함께 Mole이 해당 앱의 것으로 확인할 수 있는 관련 파일을 제거합니다. 같은 앱의 다른 설치본이 아직 사용하는 공유 파일은 보존됩니다. 이미 삭제된 앱의 경우 `mo clean`을 실행하여 남은 잔여물을 찾으세요.
+
+설정과 플러그인 등 개인 데이터는 기본적으로 보존됩니다. 삭제 미리보기에서 `D`를 누르면 삭제할 데이터 경로를 개별적으로 선택할 수 있습니다. 삭제 후 shell, Hook, MCP 설정에 삭제된 경로의 참조가 있으면 파일과 줄 번호만 표시하며, 설정은 수정하지 않습니다.
 
 ```text
 $ mo uninstall
@@ -182,14 +195,18 @@ Select Apps to Remove  1/3 selected
 
 Files to be removed:
 
-✓ Photoshop 2024, 12.80GB
+✓ Photoshop 2024, 4.20GB
   ✓ /Applications/Adobe Photoshop 2024/Adobe Photoshop 2024.app
-  ✓ ~/Library/Application Support/Adobe/Adobe Photoshop 2024
-  ✓ ~/Library/Preferences/com.adobe.Photoshop.plist
+
+Personal data kept:
+  ~/Library/Application Support/Adobe/Adobe Photoshop 2024
+  ~/Library/Preferences/com.adobe.Photoshop.plist
+
+D choose personal data
 
 ======================================================================
 Uninstall complete
-Removed 1 app, freed 12.80GB: Photoshop 2024
+Removed 1 app, freed 4.20GB: Photoshop 2024
 ======================================================================
 ```
 
@@ -207,30 +224,29 @@ Optimize
 PERFORMANCE DIAGNOSIS
   ✓ No sustained high-CPU bottleneck detected
 
-➤ DNS & Spotlight Check
-  → DNS cache flushed
-  → Spotlight index verified
-
 ➤ Finder Cache Refresh
   → QuickLook thumbnails refreshed
   → Icon services cache rebuilt
+
+➤ Network Cache Refresh
+  → DNS cache refreshed
 
 ➤ Database Optimization
   ◎ Close these apps before database optimization: Safari
 
 ➤ Disk Health
-  → Disk verify skipped (set MOLE_ENABLE_DISK_VERIFY=1 to enable)
+  → Disk verify skipped
 
 ======================================================================
 Optimization Complete
-Applied 3 optimizations
-14 unchanged | 3 skipped | 1 unavailable
+Applied 2 optimizations
+13 unchanged | 3 skipped | 1 unavailable
 ======================================================================
 ```
 
 ### 디스크 분석 (Analyze)
 
-`mo analyze`는 터미널 기반의 인터랙티브 디스크 탐색기입니다. 방향키와 Vim 단축키 탐색, 빠른 필터링, 다중 선택, Finder 미리보기 및 휴지통 이동을 지원합니다. 외장 드라이브는 기본 뷰에서 제외되며 `mo analyze /Volumes`로 확인할 수 있습니다. `mo analyze /private/tmp`를 사용하면 자동 삭제 없이 임시 파일만 확인할 수 있습니다.
+`mo analyze`는 터미널 기반의 인터랙티브 디스크 탐색기입니다. 방향키와 Vim 단축키 탐색, 빠른 필터링, 다중 선택, Finder 미리보기 및 휴지통 이동을 지원합니다. 외장 드라이브는 기본 뷰에서 제외되며 `mo analyze /Volumes` 또는 특정 마운트 경로로 확인할 수 있습니다. `mo analyze /private/tmp`를 사용하면 자동 삭제 없이 임시 파일만 확인할 수 있습니다. 파일별 스캔에서는 모든 블록을 공유하는 APFS 클론을 한 번만 계산합니다. 폴더 크기를 빠르게 추정할 때는 공유 블록이 중복 계산될 수 있습니다.
 
 크기 뒤에 `+`가 붙은 항목은 부분 검사를 의미하며, `unknown`은 계산이 불가능했음을 나타냅니다. 일시적인 시간 초과로 중단된 결과는 기존 캐시를 덮어쓰지 않으므로 나중에 다시 검사하여 보완할 수 있습니다. macOS가 터미널의 읽기를 허용하지 않는 폴더는 접근 권한이 바뀔 때까지 부분 검사로 남습니다. 터미널에는 상위 30개 항목만 표시되므로 읽을 수 없는 항목이 목록 밖에 있을 수 있지만, 합계는 여전히 부분 검사로 표시됩니다. JSON 출력에는 모든 항목이 포함됩니다.
 
@@ -290,6 +306,20 @@ Proxy   HTTP · 192.168.1.100             Chrome     ▮▮▮▯▯  28.3%
 - `mo history --json`: 정리 작업 이력을 JSON으로 출력합니다. 각 세션에는 `run_id`(불투명한 문자열이며 식별 정보가 기록되지 않았으면 빈 값)와 `attribution`이 들어 있으며, 식별된 실행은 `run`, 예전 명령 단위 묶음은 `command`, 예전 마커로 중단과 겹친 실행을 구분할 수 없으면 `ambiguous`입니다. 기록된 작업은 계속 확인할 수 있지만 `ambiguous` 개수는 개별 실행에 정확히 나눌 수 없습니다. `ended_at`이 비어 있으면 종료 마커가 기록되지 않은 것입니다.
 
 ```text
+$ mo analyze --json ~/Documents
+{
+  "path": "/Users/you/Documents",
+  "overview": false,
+  "entries": [
+    { "name": "Library", "path": "...", "size": 80939438080, "is_dir": true }
+  ],
+  "large_files": [
+    { "name": "backup.zip", "path": "...", "size": 8796093022 }
+  ],
+  "total_size": 168393441280,
+  "total_files": 42187
+}
+
 $ mo status --json
 {
   "host": "MacBook-Pro",
@@ -407,7 +437,7 @@ Raycast 설정 방법:
 2. `~/Library/Application Support/Raycast/script-commands` 폴더를 스크립트 디렉터리로 추가합니다.
 3. Raycast에서 **Reload Script Directories**를 실행합니다.
 
-런처는 시스템 터미널(Terminal, iTerm2, Alacritty, kitty, WezTerm, Ghostty, Hyper, WindTerm, Warp)을 자동 감지합니다. `MO_LAUNCHER_APP=<이름>`으로 터미널을 지정하거나 [Kaku](https://github.com/tw93/Kaku)에서 직접 실행할 수도 있습니다.
+런처는 터미널(Terminal, iTerm2, Alacritty, kitty, WezTerm, Ghostty, Hyper, WindTerm, Warp)을 자동 감지합니다. `MO_LAUNCHER_APP=<이름>`으로 터미널을 지정하거나 [Kaku](https://github.com/tw93/Kaku)에서 직접 실행할 수도 있습니다.
 
 </details>
 

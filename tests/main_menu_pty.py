@@ -104,14 +104,16 @@ def notice_diagnostics(process, home, parent_signal, repeat_signal, keys, wait_m
     return details
 
 
-def check_notice(script, expected_status=0, wait_marker=None, keys=b'', required=(), forbidden=(), parent_signal=None, repeat_signal=None):
+def check_notice(script, expected_status=0, wait_marker=None, keys=b'', required=(), forbidden=(), parent_signal=None, repeat_signal=None, block_term=False):
     with tempfile.TemporaryDirectory(prefix="mole-update-terminal-") as home:
         master, slave = pty.openpty()
         env = dict(os.environ, HOME=home, TERM="xterm-256color", TEST_ROOT=str(root),
                    MOLE_TEST_MODE="1", MOLE_SKIP_MAIN="1", MOLE_TEST_NO_AUTH="1")
         child = 'source "$TEST_ROOT/mole"; mkdir -p "$HOME/.cache/mole"; ' + script
+        inherited_mask = 'signal.pthread_sigmask(signal.SIG_BLOCK,{signal.SIGTERM}); ' if block_term else ''
         keeper = ('import subprocess,time,signal; signal.signal(signal.SIGINT,lambda *a:None); '
-                  f'p=subprocess.run(["/bin/bash","--noprofile","--norc","-c",{child!r}]); '
+                  + inherited_mask
+                  + f'p=subprocess.run(["/bin/bash","--noprofile","--norc","-c",{child!r}]); '
                   'print("CASE_EXIT="+str(p.returncode),flush=True); time.sleep(10)')
 
         def terminal():
@@ -175,6 +177,34 @@ check_for_updates(){ echo CHECK_CALLED; printf 'Update 9.8.7 available, run mo u
 SCRIPT_DIR="$HOME/commands"
 mkdir -p "$SCRIPT_DIR/bin"
 '''
+
+
+def check_inherited_term_mask():
+    # tty7's daemon blocks TERM and its panes inherit that mask. The real
+    # interactive launcher must clear it before a child stops its spinner.
+    check_notice(setup + r'''
+cat > "$HOME/masked-term-child" <<'CHILD'
+#!/bin/bash
+set -euo pipefail
+(
+    trap 'exit 0' TERM
+    : > "$HOME/spinner-ready"
+    while :; do sleep 0.01; done
+) &
+spinner=$!
+while [[ ! -e "$HOME/spinner-ready" ]]; do sleep 0.01; done
+kill -TERM "$spinner"
+wait "$spinner"
+printf 'SPINNER_STOPPED\n'
+CHILD
+chmod +x "$HOME/masked-term-child"
+run_mole_command "$HOME/masked-term-child"
+''', block_term=True, required=(b'SPINNER_STOPPED',))
+
+
+check_inherited_term_mask()
+print('PASS: an inherited blocked TERM does not hang spinner shutdown')
+
 for command in ['clean', 'optimize', 'uninstall', 'purge', 'installer', 'analyze', 'status']:
     script = setup + f'''
 printf '#!/bin/bash\\nprintf "COMMAND_DONE\\\\n"\\nexit 7\\n' > "$SCRIPT_DIR/bin/{command}.sh"
@@ -285,6 +315,17 @@ print('PASS: a missing perl falls back to a plain exec with the command status')
 check_notice(setup + '''run_mole_command /bin/bash -c 'echo CHILD_READY; kill -KILL $$' ''',
              expected_status=137, required=(b'CHILD_READY',), forbidden=(b'perl', b'Killed', b'Update 9.8.7'))
 print('PASS: a child killed by a signal keeps its status without bash job-status text')
+
+# Bash prints that same job-status line from whichever command finishes first
+# after the child is gone. Hold the router after the launch until the child has
+# died, then run an external command in the same window: nothing there may
+# reach the terminal, or a slow runner leaks the line at random (seen on CI).
+after_launch = instrument_router('command_pid=$!',
+                                 'command_pid=$!; local launch_deadline=$((SECONDS + 2)); '
+                                 'while ((SECONDS < launch_deadline)); do :; done; /bin/echo > /dev/null')
+check_notice(setup + after_launch + '''run_mole_command /bin/bash -c 'echo CHILD_READY; kill -KILL $$' ''',
+             expected_status=137, required=(b'CHILD_READY',), forbidden=(b'perl', b'Killed', b'Update 9.8.7'))
+print('PASS: a child that dies before the wait starts leaves no job-status line')
 
 # Delivery counts for INT. A terminal Ctrl-C reaches the child from the tty and
 # again from the router's forward, so one or two deliveries are expected there;

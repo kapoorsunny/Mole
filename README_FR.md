@@ -1,9 +1,11 @@
+<p align="right"><b>macOS</b> · <a href="https://github.com/tw93/Mole/tree/windows">Windows</a></p>
+
 <div align="center">
   <h1>Mole</h1>
   <p><b>Nettoyage en profondeur, désinstallation d'apps, optimisation, analyse de disque et surveillance pour Mac. CLI open source gratuite, plus une app Mac native.</b></p>
-  <p><a href="README.md">English</a> · <a href="README_CN.md">中文</a> · <a href="README_TW.md">繁體</a> · <a href="README_JA.md">日本語</a> · <a href="README_KR.md">한국어</a> · <a href="README_DE.md">Deutsch</a> · Français</p>
+  <p><a href="README.md">English</a> · <a href="README_CN.md">中文</a> · <a href="README_TW.md">繁體</a> · <a href="README_JA.md">日本語</a> · <a href="README_KR.md">한국어</a> · <a href="README_DE.md">Deutsch</a> · Français · <a href="README_UA.md">Українська</a> · <a href="README_RU.md">Русский</a></p>
   <a href="https://github.com/tw93/mole/stargazers"><img src="https://img.shields.io/github/stars/tw93/mole?style=flat-square" alt="Stars"></a>
-  <a href="https://github.com/tw93/mole/releases"><img src="https://img.shields.io/github/v/tag/tw93/mole?label=version&style=flat-square" alt="Version"></a>
+  <a href="https://github.com/tw93/mole/releases"><img src="https://img.shields.io/github/v/release/tw93/mole?label=version&style=flat-square" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL_v3-blue.svg?style=flat-square" alt="License"></a>
   <a href="https://github.com/tw93/mole/commits"><img src="https://img.shields.io/github/commit-activity/m/tw93/mole?style=flat-square" alt="Commits"></a>
   <a href="https://twitter.com/HiTw93"><img src="https://img.shields.io/badge/follow-Tw93-red?style=flat-square&logo=Twitter" alt="Twitter"></a>
@@ -14,7 +16,7 @@
   <img src="./docs/img/big-mole.png" alt="Résultats du nettoyage avec Mole" width="1000" />
 </p>
 
-> 💡 Ce dépôt contient la CLI open source gratuite (`mo`). Vous préférez une app native ? [Mole for Mac](https://mole.fit/) se télécharge séparément : vérification avant suppression, nettoyage des résidus testé sur plus de 800 apps, maintenance, exploration détaillée du disque, état en direct et contrôle des ventilateurs sur les Mac compatibles. `brew install mole` installe uniquement la CLI.
+> 💡 Ce dépôt contient la CLI open source gratuite (`mo`). Vous préférez une app native ? [Mole for Mac](https://mole.fit/) se télécharge séparément : vérification avant suppression, nettoyage des résidus testé sur plus de 800 apps, maintenance, exploration détaillée du disque, état en direct et contrôle des ventilateurs sur les Mac compatibles. Sous Windows, l'app native est [Mole for Windows](https://mole.fit/fr/windows). `brew install mole` installe uniquement la CLI.
 
 ## Fonctionnalités
 
@@ -27,7 +29,7 @@
 
 ## Démarrage rapide
 
-Mole nécessite macOS 12 ou une version plus récente et prend en charge les Mac Intel et Apple Silicon. Si Homebrew ne prend plus en charge votre version de macOS, utilisez plutôt le script d'installation ; une version expérimentale pour Windows est accessible sur la [branche windows](https://github.com/tw93/Mole/tree/windows).
+Mole nécessite macOS 12 ou une version plus récente et prend en charge les Mac Intel et Apple Silicon. Si Homebrew ne prend plus en charge votre version de macOS, utilisez plutôt le script d'installation.
 
 **Installation via Homebrew**
 
@@ -40,6 +42,14 @@ brew install mole
 ```bash
 curl -fsSL https://raw.githubusercontent.com/tw93/mole/main/install.sh | bash
 ```
+
+**Sous Windows** ([CLI Windows](https://github.com/tw93/Mole/tree/windows))
+
+```powershell
+iwr -useb https://raw.githubusercontent.com/tw93/Mole/windows/quick-install.ps1 | iex
+```
+
+Mole est distribué uniquement via Homebrew, ce dépôt GitHub et [mole.fit](https://mole.fit/) pour les apps Mac et Windows. Les sites qui proposent une app « basée sur Mole » ou vous demandent de coller une commande encodée dans le Terminal n'ont aucun lien avec Mole.
 
 **Commandes principales**
 
@@ -91,7 +101,7 @@ curl -fsSL https://raw.githubusercontent.com/tw93/mole/main/install.sh | bash -s
 curl -fsSL https://raw.githubusercontent.com/tw93/mole/main/install.sh | bash -s -- main
 ```
 
-`main` installe le code en cours de développement issu de la branche principale. `latest` est un alias historique pointant vers `main` ; il n'installe pas la version stable la plus récente.
+`main` installe le code en cours de développement issu de la branche principale, attendez-vous à quelques imperfections. `latest` est un alias historique pointant vers `main` ; il n'installe pas la version stable la plus récente.
 
 Par défaut, le script installe Mole dans `/usr/local/bin`, ce qui peut nécessiter un mot de passe administrateur. Pour des mises à jour ultérieures sans mot de passe, installez-le dans un dossier utilisateur :
 
@@ -123,19 +133,20 @@ Mole peut supprimer des fichiers ; il valide donc les chemins, protège les empl
 
 - `clean`, `uninstall`, `purge`, `installer` et `remove` suppriment des fichiers : prévisualisez toujours leurs actions avec `--dry-run`, complété au besoin de `--debug`
 - Exécutez Mole **sans `sudo`** : les privilèges administrateur ne sont demandés que pour les actions touchant au système
-- `mo analyze` place les éléments sélectionnés dans la Corbeille de macOS après confirmation
+- `mo uninstall` et `mo analyze` placent leurs suppressions dans la Corbeille par défaut après confirmation ; `clean`, `purge` et `installer` suppriment définitivement. `mo uninstall --permanent` évite la Corbeille
 - Les opérations de nettoyage sont consignées dans `~/Library/Logs/mole/operations.log` ; consultez-les avec `mo history` ou désactivez la journalisation avec `MO_NO_OPLOG=1`
-- Préservez des dossiers avec `mo clean --whitelist` ou excluez des opérations avec `mo optimize --whitelist`
+- Préservez des caches avec `mo clean --whitelist` ou excluez des opérations avec `mo optimize --whitelist`
+- Si le fichier de liste blanche est illisible, `clean`, `purge` et `optimize` s'arrêtent au lieu de s'exécuter sans lui
 
 Consultez [SECURITY.md](SECURITY.md) et [SECURITY_AUDIT.md](SECURITY_AUDIT.md) pour la marche à suivre en cas de vulnérabilité, les limites de sécurité et les restrictions actuelles.
 
 ## Détail des fonctionnalités
 
-Les exemples suivants sont abrégés. Les éléments détectés, volumes et motifs d'exclusion dépendent de votre Mac.
+Les exemples suivants sont abrégés. Les éléments détectés, les tailles et les raisons d'omission dépendent de votre Mac.
 
 ### Nettoyage (Clean)
 
-`mo clean` analyse les caches sûrs, les journaux, les fichiers temporaires, les dossiers de développement et les résidus d'applications désinstallées. Il vide la corbeille par défaut ; pour la conserver, sélectionnez Trash dans `mo clean --whitelist`, le même menu qui préserve les caches à garder. La sélection est enregistrée dans `~/.config/mole/whitelist`. Avant d'ajouter des chemins personnalisés, ouvrez le menu et appuyez sur Entrée pour enregistrer la sélection, puis ajoutez un chemin par ligne. Un fichier existant remplace les règles par défaut optionnelles ; les protections de sécurité intégrées s'appliquent toujours.
+`mo clean` analyse les caches sûrs, les journaux, les fichiers temporaires, les dossiers de développement et les résidus d'applications désinstallées. Il vide `~/.Trash` par défaut ; pour le conserver, sélectionnez Trash dans `mo clean --whitelist`, le même menu qui préserve les caches à garder. Les corbeilles de volume telles que `/Volumes/*/.Trashes` ne sont pas vidées par cette opération. La sélection est enregistrée dans `~/.config/mole/whitelist`. Avant d'ajouter des chemins personnalisés, ouvrez le menu et appuyez sur Entrée pour enregistrer la sélection, puis ajoutez un chemin par ligne. Un fichier existant remplace les règles par défaut optionnelles ; les protections de sécurité intégrées s'appliquent toujours.
 
 ```text
 $ mo clean
@@ -171,6 +182,8 @@ Free space: 223.5GB (+4.5GB)
 
 `mo uninstall` supprime une application installée ainsi que les fichiers associés que Mole peut rattacher à cette application. Si une autre copie installée de la même application utilise encore des fichiers partagés, Mole les conserve. Si l'application a déjà été supprimée manuellement, lancez `mo clean` pour trouver les résidus orphelins.
 
+Les données personnelles, notamment les réglages et les extensions, sont conservées par défaut. Appuyez sur `D` dans l’aperçu pour sélectionner les chemins de données à supprimer. Après la désinstallation, les références aux chemins supprimés dans les configurations shell, Hook ou MCP sont indiquées uniquement par fichier et numéro de ligne, sans modifier ces configurations.
+
 ```text
 $ mo uninstall
 
@@ -182,14 +195,18 @@ Select Apps to Remove  1/3 selected
 
 Files to be removed:
 
-✓ Photoshop 2024, 12.80GB
+✓ Photoshop 2024, 4.20GB
   ✓ /Applications/Adobe Photoshop 2024/Adobe Photoshop 2024.app
-  ✓ ~/Library/Application Support/Adobe/Adobe Photoshop 2024
-  ✓ ~/Library/Preferences/com.adobe.Photoshop.plist
+
+Personal data kept:
+  ~/Library/Application Support/Adobe/Adobe Photoshop 2024
+  ~/Library/Preferences/com.adobe.Photoshop.plist
+
+D choose personal data
 
 ======================================================================
 Uninstall complete
-Removed 1 app, freed 12.80GB: Photoshop 2024
+Removed 1 app, freed 4.20GB: Photoshop 2024
 ======================================================================
 ```
 
@@ -207,30 +224,29 @@ Optimize
 PERFORMANCE DIAGNOSIS
   ✓ No sustained high-CPU bottleneck detected
 
-➤ DNS & Spotlight Check
-  → DNS cache flushed
-  → Spotlight index verified
-
 ➤ Finder Cache Refresh
   → QuickLook thumbnails refreshed
   → Icon services cache rebuilt
+
+➤ Network Cache Refresh
+  → DNS cache refreshed
 
 ➤ Database Optimization
   ◎ Close these apps before database optimization: Safari
 
 ➤ Disk Health
-  → Disk verify skipped (set MOLE_ENABLE_DISK_VERIFY=1 to enable)
+  → Disk verify skipped
 
 ======================================================================
 Optimization Complete
-Applied 3 optimizations
-14 unchanged | 3 skipped | 1 unavailable
+Applied 2 optimizations
+13 unchanged | 3 skipped | 1 unavailable
 ======================================================================
 ```
 
 ### Analyse de l'espace (Analyze)
 
-`mo analyze` ouvre un explorateur de disque interactif dans le terminal. Il prend en charge les touches fléchées et les raccourcis Vim, le filtrage rapide, la sélection multiple, la prévisualisation dans le Finder et le déplacement confirmé vers la Corbeille. Les disques externes sont ignorés par défaut dans la vue générale ; examinez-les avec `mo analyze /Volumes`. Utilisez `mo analyze /private/tmp` pour vérifier les dossiers temporaires sans déclencher de nettoyage automatique.
+`mo analyze` ouvre un explorateur de disque interactif dans le terminal. Il prend en charge les touches fléchées et les raccourcis Vim, le filtrage rapide, la sélection multiple, la prévisualisation dans le Finder et le déplacement confirmé vers la Corbeille. Les disques externes sont ignorés par défaut dans la vue générale ; examinez-les avec `mo analyze /Volumes` ou un point de montage précis. Utilisez `mo analyze /private/tmp` pour vérifier les dossiers temporaires sans déclencher de nettoyage automatique. L’analyse fichier par fichier compte une seule fois les clones APFS qui partagent tous leurs blocs ; les estimations rapides des dossiers peuvent encore compter plusieurs fois les blocs partagés.
 
 Une taille terminée par `+` signale une analyse partielle ; `unknown` indique que le volume n'a pas pu être mesuré. Les résultats interrompus par un délai d'attente n'écrasent pas les mesures complètes en cache ; une analyse ultérieure comblera les données manquantes. Les dossiers que macOS ne laisse pas lire au terminal restent marqués comme partiels tant que les droits d'accès ne changent pas. La liste du terminal ne garde que les 30 plus gros éléments, si bien qu'un élément illisible peut ne pas y figurer ; le total signale tout de même une analyse partielle. La sortie JSON d'un dossier inclut tous les éléments analysés.
 
@@ -290,6 +306,20 @@ Le score de santé combine le CPU, la mémoire, l'espace disque, l'état SMART, 
 - `mo history --json` : affiche l'historique des nettoyages au format JSON. Les sessions incluent `run_id` (une chaîne opaque, vide si aucune identité n'a été enregistrée) et `attribution` : `run` pour les exécutions identifiées, `command` pour l'ancien regroupement par commande, ou `ambiguous` quand les anciens marqueurs ne permettent pas de distinguer une interruption d'exécutions qui se chevauchent. Les actions enregistrées restent disponibles ; les décomptes ambigus ne peuvent pas être attribués de façon fiable à une exécution précise. Un `ended_at` vide signifie qu'aucun marqueur de fin n'a été enregistré.
 
 ```text
+$ mo analyze --json ~/Documents
+{
+  "path": "/Users/you/Documents",
+  "overview": false,
+  "entries": [
+    { "name": "Library", "path": "...", "size": 80939438080, "is_dir": true }
+  ],
+  "large_files": [
+    { "name": "backup.zip", "path": "...", "size": 8796093022 }
+  ],
+  "total_size": 168393441280,
+  "total_files": 42187
+}
+
 $ mo status --json
 {
   "host": "MacBook-Pro",
@@ -363,7 +393,7 @@ Si des chemins personnalisés sont définis, Mole scanne exclusivement ces dossi
 
 ### Fichiers d'installation (Installer)
 
-`mo installer` recherche les fichiers DMG, PKG, MPKG, ISO, XIP et ZIP d'installation dans Téléchargements, le Bureau, les caches Homebrew, iCloud, Mail, Telegram et d'autres emplacements pris en charge. Chaque élément affiche son poids et sa provenance avant suppression. L'analyse dispose d'un délai d'expiration global ; si une analyse ou une lecture de métadonnées échoue ou expire, Mole abandonne la liste sans sélectionner de fichiers. Les archives ZIP corrompues ou illisibles sont ignorées, et les racines d'analyse en lien symbolique sont prises en charge, mais les liens symboliques situés en dessous ne sont pas suivis. Une ultime vérification est effectuée juste avant la suppression pour s'assurer que le fichier n'a pas changé.
+`mo installer` recherche les fichiers DMG, PKG, MPKG, ISO, XIP et ZIP d'installation dans Téléchargements, le Bureau, les caches Homebrew, iCloud, Mail, Telegram et d'autres emplacements pris en charge. Chaque élément affiche sa taille et sa provenance avant suppression. L'analyse dispose d'un délai d'expiration global ; si une analyse ou une lecture de métadonnées échoue ou expire, Mole abandonne la liste sans sélectionner de fichiers. Les archives ZIP corrompues ou illisibles sont ignorées, et les racines d'analyse en lien symbolique sont prises en charge, mais les liens symboliques situés en dessous ne sont pas suivis. Une ultime vérification est effectuée juste avant la suppression pour s'assurer que le fichier n'a pas changé.
 
 <details>
 <summary><strong>Exemple de sortie Installer</strong></summary>
@@ -399,7 +429,7 @@ Installez en une commande cinq raccourcis rapides pour Clean, Uninstall, Optimiz
 curl -fsSL https://raw.githubusercontent.com/tw93/Mole/main/scripts/setup-quick-launchers.sh | bash
 ```
 
-Le script installe les commandes Raycast et ajoute les flux de travail Alfred correspondants avec les mots-clés `clean`, `uninstall`, `optimize`, `analyze` et `status`.
+Le script installe les commandes Raycast et, si des préférences Alfred sont présentes, ajoute les flux de travail Alfred correspondants avec les mots-clés `clean`, `uninstall`, `optimize`, `analyze` et `status`.
 
 Configuration requise dans Raycast :
 

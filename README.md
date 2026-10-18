@@ -1,9 +1,11 @@
+<p align="right"><b>macOS</b> · <a href="https://github.com/tw93/Mole/tree/windows">Windows</a></p>
+
 <div align="center">
   <h1>Mole</h1>
   <p><b>Deep clean, uninstall apps, optimize, analyze disk, and monitor your Mac. Free open-source CLI, plus a native Mac app.</b></p>
-  <p>English · <a href="README_CN.md">中文</a> · <a href="README_TW.md">繁體</a> · <a href="README_JA.md">日本語</a> · <a href="README_KR.md">한국어</a> · <a href="README_DE.md">Deutsch</a> · <a href="README_FR.md">Français</a></p>
+  <p>English · <a href="README_CN.md">中文</a> · <a href="README_TW.md">繁體</a> · <a href="README_JA.md">日本語</a> · <a href="README_KR.md">한국어</a> · <a href="README_DE.md">Deutsch</a> · <a href="README_FR.md">Français</a> · <a href="README_UA.md">Українська</a> · <a href="README_RU.md">Русский</a></p>
   <a href="https://github.com/tw93/mole/stargazers"><img src="https://img.shields.io/github/stars/tw93/mole?style=flat-square" alt="Stars"></a>
-  <a href="https://github.com/tw93/mole/releases"><img src="https://img.shields.io/github/v/tag/tw93/mole?label=version&style=flat-square" alt="Version"></a>
+  <a href="https://github.com/tw93/mole/releases"><img src="https://img.shields.io/github/v/release/tw93/mole?label=version&style=flat-square" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL_v3-blue.svg?style=flat-square" alt="License"></a>
   <a href="https://github.com/tw93/mole/commits"><img src="https://img.shields.io/github/commit-activity/m/tw93/mole?style=flat-square" alt="Commits"></a>
   <a href="https://twitter.com/HiTw93"><img src="https://img.shields.io/badge/follow-Tw93-red?style=flat-square&logo=Twitter" alt="Twitter"></a>
@@ -14,7 +16,7 @@
   <img src="./docs/img/big-mole.png" alt="Mole cleanup results" width="1000" />
 </p>
 
-> 💡 This repo is the free open-source CLI (`mo`). Prefer a native app? [Mole for Mac](https://mole.fit/) is a separate download with review-before-delete cleanup, tested leftovers for 800+ apps, maintenance, disk drill-downs, live status, and fan controls on supported Macs. `brew install mole` installs the CLI only.
+> 💡 This repo is the free open-source CLI (`mo`). Prefer a native app? [Mole for Mac](https://mole.fit/) is a separate download with review-before-delete cleanup, tested leftovers for 800+ apps, maintenance, disk drill-downs, live status, and fan controls on supported Macs. On Windows, the native app is [Mole for Windows](https://mole.fit/windows). `brew install mole` installs the CLI only.
 
 ## Features
 
@@ -27,7 +29,7 @@
 
 ## Quick Start
 
-Mole requires macOS 12 or newer and supports both Intel and Apple Silicon Macs. If Homebrew no longer supports your macOS version, use the script install instead. An experimental Windows version lives in the [windows branch](https://github.com/tw93/Mole/tree/windows).
+Mole requires macOS 12 or newer and supports both Intel and Apple Silicon Macs. If Homebrew no longer supports your macOS version, use the script install instead.
 
 **Install via Homebrew**
 
@@ -40,6 +42,14 @@ brew install mole
 ```bash
 curl -fsSL https://raw.githubusercontent.com/tw93/mole/main/install.sh | bash
 ```
+
+**On Windows** ([Windows CLI](https://github.com/tw93/Mole/tree/windows))
+
+```powershell
+iwr -useb https://raw.githubusercontent.com/tw93/Mole/windows/quick-install.ps1 | iex
+```
+
+Mole is only distributed through Homebrew, this GitHub repository, and [mole.fit](https://mole.fit/) for the Mac and Windows apps. Sites offering a "Mole-based" app or asking you to paste an encoded command into Terminal are not affiliated with Mole.
 
 **Run**
 
@@ -123,9 +133,10 @@ Mole can remove files, so it validates paths, protects shared and system-owned l
 
 - `clean`, `uninstall`, `purge`, `installer`, and `remove` can delete files, so review them with `--dry-run` first and add `--debug` when needed
 - Run Mole without `sudo`; it requests administrator access only when needed
-- `mo analyze` moves selected items to Trash after confirmation
+- `mo uninstall` and `mo analyze` route deletions to Trash by default after confirmation; `clean`, `purge`, and `installer` delete permanently. `mo uninstall --permanent` skips Trash
 - Cleanup activity is recorded in `~/Library/Logs/mole/operations.log`; review it with `mo history` or disable it with `MO_NO_OPLOG=1`
 - Protect caches with `mo clean --whitelist`, or maintenance items with `mo optimize --whitelist`
+- If the whitelist file cannot be read, `clean`, `purge`, and `optimize` stop instead of running without it
 
 Review [SECURITY.md](SECURITY.md) and [SECURITY_AUDIT.md](SECURITY_AUDIT.md) for reporting guidance, safety boundaries, and current limitations.
 
@@ -135,7 +146,7 @@ The examples below are shortened. Available items, sizes, and skip reasons depen
 
 ### Clean
 
-`mo clean` reviews known-safe caches, logs, temporary files, developer artifacts, and leftovers from apps that are no longer installed. It empties the Trash by default; to keep it, select Trash in `mo clean --whitelist`, the same menu that protects caches you want to keep. Selections persist in `~/.config/mole/whitelist`. Before adding custom paths, open the menu and press Enter to save the selections, then append one path per line. An existing file replaces the optional defaults; built-in safety protections still apply.
+`mo clean` reviews known-safe caches, logs, temporary files, developer artifacts, and leftovers from apps that are no longer installed. It empties `~/.Trash` by default; to keep it, select Trash in `mo clean --whitelist`, the same menu that protects caches you want to keep. Volume Trashes such as `/Volumes/*/.Trashes` are not emptied with it. Selections persist in `~/.config/mole/whitelist`. Before adding custom paths, open the menu and press Enter to save the selections, then append one path per line. An existing file replaces the optional defaults; built-in safety protections still apply.
 
 ```text
 $ mo clean
@@ -171,6 +182,8 @@ Free space: 223.5GB (+4.5GB)
 
 `mo uninstall` removes an installed app together with related files that Mole can tie back to that app. It keeps shared data when another installed copy still uses it. If the app is already gone, use `mo clean` to look for leftovers.
 
+Personal data, including settings and plugins, is kept by default. Press `D` in the removal preview to select individual data paths. After removal, references in shell, Hook, or MCP configuration are listed by file and line only; Mole does not edit those configurations.
+
 ```text
 $ mo uninstall
 
@@ -182,14 +195,18 @@ Select Apps to Remove  1/3 selected
 
 Files to be removed:
 
-✓ Photoshop 2024, 12.80GB
+✓ Photoshop 2024, 4.20GB
   ✓ /Applications/Adobe Photoshop 2024/Adobe Photoshop 2024.app
-  ✓ ~/Library/Application Support/Adobe/Adobe Photoshop 2024
-  ✓ ~/Library/Preferences/com.adobe.Photoshop.plist
+
+Personal data kept:
+  ~/Library/Application Support/Adobe/Adobe Photoshop 2024
+  ~/Library/Preferences/com.adobe.Photoshop.plist
+
+D choose personal data
 
 ======================================================================
 Uninstall complete
-Removed 1 app, freed 12.80GB: Photoshop 2024
+Removed 1 app, freed 4.20GB: Photoshop 2024
 ======================================================================
 ```
 
@@ -207,30 +224,29 @@ Optimize
 PERFORMANCE DIAGNOSIS
   ✓ No sustained high-CPU bottleneck detected
 
-➤ DNS & Spotlight Check
-  → DNS cache flushed
-  → Spotlight index verified
-
 ➤ Finder Cache Refresh
   → QuickLook thumbnails refreshed
   → Icon services cache rebuilt
+
+➤ Network Cache Refresh
+  → DNS cache refreshed
 
 ➤ Database Optimization
   ◎ Close these apps before database optimization: Safari
 
 ➤ Disk Health
-  → Disk verify skipped (set MOLE_ENABLE_DISK_VERIFY=1 to enable)
+  → Disk verify skipped
 
 ======================================================================
 Optimization Complete
-Applied 3 optimizations
-14 unchanged | 3 skipped | 1 unavailable
+Applied 2 optimizations
+13 unchanged | 3 skipped | 1 unavailable
 ======================================================================
 ```
 
 ### Analyze
 
-`mo analyze` opens a terminal disk explorer. It supports arrow keys and Vim navigation, filtering, multi-selection, Finder preview, and confirmed moves to Trash. External drives are skipped from the default overview; inspect them with `mo analyze /Volumes` or a specific mount path. Use `mo analyze /private/tmp` to review user-owned temporary files without turning them into automatic cleanup targets.
+`mo analyze` opens a terminal disk explorer. It supports arrow keys and Vim navigation, filtering, multi-selection, Finder preview, and confirmed moves to Trash. External drives are skipped from the default overview; inspect them with `mo analyze /Volumes` or a specific mount path. Use `mo analyze /private/tmp` to review user-owned temporary files without turning them into automatic cleanup targets. File-by-file scans count APFS clones that share all blocks once; fast folder estimates can still count shared blocks more than once.
 
 A size ending in `+` contains measured bytes from a partial scan; `unknown` means the size could not be measured. Results cut short by temporary failures such as timeouts do not replace complete cached measurements, and a later refresh can recover the missing data. Folders macOS will not let the terminal read stay partial until access changes. The terminal list keeps the 30 largest entries, so an unreadable entry may fall outside that list; the total still indicates a partial scan. Directory JSON output includes all scanned entries.
 
@@ -287,7 +303,7 @@ The health score combines CPU, memory, disk capacity, SMART status, I/O, thermal
 - `mo status --json` returns a one-time status snapshot as JSON
 - `mo status | jq '.health_score'` switches to JSON automatically when output is piped
 - `mo status --watch --interval 2s` streams newline-delimited JSON from a warm collector
-- `mo history --json` returns cleanup activity as JSON. Sessions include `run_id` (an opaque string, empty when no identity was logged) and `attribution`: `run` for identified runs, `command` for legacy command-based grouping, or `ambiguous` when legacy markers cannot distinguish interruption from overlapping runs. Recorded actions remain available; ambiguous counts cannot be assigned reliably to individual runs. An empty `ended_at` means no end marker was recorded.
+- `mo history --json` returns cleanup activity as JSON. Sessions include `run_id` (an opaque string, empty when no identity was logged) and `attribution`: `run` for identified runs, `command` for legacy command-based grouping, or `ambiguous` when legacy markers cannot distinguish interruption from overlapping runs. Recorded actions remain available; ambiguous counts cannot be assigned reliably to individual runs. An empty `ended_at` means no end marker was recorded
 
 ```text
 $ mo analyze --json ~/Documents

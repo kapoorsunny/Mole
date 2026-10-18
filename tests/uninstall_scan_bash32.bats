@@ -379,6 +379,30 @@ EOF
     [[ "$output" == *'refresh-interruption-cleaned no-later-row'* ]] || return 1
 }
 
+@test "detached metadata refresh writes debug lines to the session log users send" {
+    # A script file, not stdin: the detached refresh forks while bash is still
+    # reading its own script, and a shared stdin offset would truncate it.
+    cat > "$HOME/refresh-debug.sh" <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/bin/uninstall.sh"
+trap - EXIT INT TERM
+export MO_DEBUG=1
+mkdir -p "$MOLE_UNINSTALL_META_CACHE_DIR" "$HOME/First.app"
+printf 'original-cache\n' > "$MOLE_UNINSTALL_META_CACHE_FILE"
+chmod 444 "$MOLE_UNINSTALL_META_CACHE_FILE"
+printf '%s|1|org.example.App|First|%s\n' "$HOME/First.app" "$MOLE_UNINSTALL_LANGUAGE_SIGNATURE" > "$HOME/refresh"
+disown() { :; }
+start_uninstall_metadata_refresh "$HOME/refresh" || exit 1
+wait "$!" || true
+grep -q 'metadata-refresh\] Cache file not writable' "$HOME/Library/Logs/mole/mole_debug_session.log" || { printf 'refresh debug line missing from session log\n'; exit 1; }
+[[ ! -e "$HOME/.config/mole/mole_debug_session.log" ]] || { printf 'refresh debug line went to the config dir\n'; exit 1; }
+printf 'refresh-debug-in-session-log\n'
+EOF
+    run /bin/bash "$HOME/refresh-debug.sh"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'refresh-debug-in-session-log'* ]] || return 1
+}
+
 @test "first uninstall inventory snapshot matches live discovery and preserves its generation" {
     create_test_app_bundle "$HOME/Applications/Test.app" com.example.Test Test
     run /bin/bash <<'EOF'
@@ -415,7 +439,7 @@ EOF
 	# and display name, plus a matching language signature, are the conditions
 	# the awk classifier and
 	# use_cached_scan_metadata require for the cached branch to "stick".
-	app_mtime="$(stat -f %m "$apps_root/TestApp.app")"
+	app_mtime="$(/usr/bin/stat -f %m "$apps_root/TestApp.app")"
 	done_marker="$HOME/scan.done"
 
 	# The bug not only emits "unbound variable"; the spinner subshell can
@@ -507,7 +531,7 @@ EOF
 	mkdir -p "$app_path/Contents/Resources/en.lproj"
 	printf '"CFBundleDisplayName" = "VideoFusion";\n' \
 		> "$app_path/Contents/Resources/en.lproj/InfoPlist.strings"
-	app_mtime="$(stat -f %m "$app_path")"
+	app_mtime="$(/usr/bin/stat -f %m "$app_path")"
 
 	bin_dir="$HOME/bin"
 	mkdir -p "$bin_dir"
@@ -668,7 +692,7 @@ EOF
 		/bin/bash --noprofile --norc <<'EOF'
 set -euo pipefail
 source "$SRC_PATH"
-[[ "$MOLE_UNINSTALL_META_CACHE_FILE" == */uninstall_app_metadata_v3 ]]
+[[ "$MOLE_UNINSTALL_META_CACHE_FILE" == */uninstall_app_metadata_v4 ]]
 EOF
 
 	[ "$status" -eq 0 ]
@@ -1255,4 +1279,64 @@ EOF
 	}
 	[[ "$output" == *"MISSING=[]"* ]] || return 1
 	[[ "$output" == *"BACK=[$HOME/usr-local/Away.app]"* ]] || return 1
+}
+
+# PlayCover (#1715): flat iOS bundle named <bundle-id>.app in PlayCover's
+# container, plus a launcher alias whose entries all link back into it.
+create_playcover_fixture() {
+	local apps="$HOME/Library/Containers/io.playcover.PlayCover/Applications"
+	local bundle="$apps/fit.mole.probe.app"
+	mkdir -p "$bundle/en.lproj" "$HOME/Applications/PlayCover/Mole Probe.app"
+	cat > "$bundle/Info.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>fit.mole.probe</string>
+    <key>CFBundleDisplayName</key>
+    <string>Mole Probe</string>
+</dict>
+</plist>
+PLIST
+	: > "$bundle/MoleProbe"
+	local entry
+	for entry in Info.plist MoleProbe en.lproj; do
+		ln -s "$bundle/$entry" "$HOME/Applications/PlayCover/Mole Probe.app/$entry"
+	done
+}
+
+@test "uninstall lists a PlayCover bundle by its plist and hides its alias (#1715)" {
+	src="$HOME/uninstall_source.sh"
+	sourceable_uninstall_sh "$src"
+	create_playcover_fixture
+
+	run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" SRC_PATH="$src" \
+		/bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$SRC_PATH"
+apps="$HOME/Library/Containers/io.playcover.PlayCover/Applications"
+bundle="$apps/fit.mole.probe.app"
+alias_app="$HOME/Applications/PlayCover/Mole Probe.app"
+uninstall_print_app_search_dirs | grep -qxF "$apps" && echo "ROOT=yes"
+echo "ID=$(uninstall_resolve_bundle_id "$bundle")"
+echo "NAME=$(uninstall_resolve_display_name "$bundle" "fit.mole.probe")"
+uninstall_should_skip_app_path "$alias_app" && echo "ALIAS=skipped"
+# An alias holding a real file is not PlayCover's and stays listed.
+: > "$alias_app/Notes.txt"
+uninstall_should_skip_app_path "$alias_app" || echo "FOREIGN=listed"
+rm -f "$alias_app/Notes.txt"
+# A flat bundle outside PlayCover's container keeps the old unknown answer.
+mkdir -p "$HOME/Applications/Flat.app"
+cp "$bundle/Info.plist" "$HOME/Applications/Flat.app/Info.plist"
+echo "FLAT=$(uninstall_resolve_bundle_id "$HOME/Applications/Flat.app")"
+EOF
+
+	[ "$status" -eq 0 ] || { echo "$output"; return 1; }
+	[[ "$output" == *"ROOT=yes"* ]] || return 1
+	[[ "$output" == *"ID=fit.mole.probe"* ]] || return 1
+	[[ "$output" == *"NAME=Mole Probe"* ]] || return 1
+	[[ "$output" == *"ALIAS=skipped"* ]] || return 1
+	[[ "$output" == *"FOREIGN=listed"* ]] || return 1
+	[[ "$output" == *"FLAT=unknown"* ]]
 }

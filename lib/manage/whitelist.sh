@@ -157,7 +157,6 @@ Surge configuration and data|$HOME/Library/Application Support/com.nssurge.surge
 Docker BuildX cache|$HOME/.docker/buildx/cache/*|container_cache
 Podman container storage temp|$HOME/.local/share/containers/storage/tmp/*|container_cache
 Tart OCI/IPSW cache|$HOME/.tart/cache|container_cache
-Final Cut Pro proxy media (render files still cleaned)|$HOME/Movies/*.fcpbundle/*/Transcoded Media/Proxy Media|app_cache
 Font cache|$HOME/Library/Caches/com.apple.FontRegistry/*|system_cache
 Spotlight metadata cache|$HOME/Library/Caches/com.apple.spotlight/*|system_cache
 CloudKit cache|$HOME/Library/Caches/CloudKit/*|system_cache
@@ -217,13 +216,21 @@ load_whitelist() {
         config_file="$WHITELIST_CONFIG_CLEAN"
     fi
 
-    local using_legacy="false"
-    if [[ ! -f "$config_file" && -n "$legacy_file" && -f "$legacy_file" ]]; then
-        config_file="$legacy_file"
-        using_legacy="true"
+    local using_legacy="false" config_state=0 unreadable_label="whitelist"
+    [[ "$mode" != "optimize" ]] || unreadable_label="optimize whitelist"
+    mole_whitelist_file_state "$config_file" "$unreadable_label" || config_state=$?
+    [[ $config_state -ne 2 ]] || return 1
+    if [[ $config_state -eq 1 && -n "$legacy_file" ]]; then
+        config_state=0
+        mole_whitelist_file_state "$legacy_file" "$unreadable_label" || config_state=$?
+        [[ $config_state -ne 2 ]] || return 1
+        if [[ $config_state -eq 0 ]]; then
+            config_file="$legacy_file"
+            using_legacy="true"
+        fi
     fi
 
-    if [[ -f "$config_file" ]]; then
+    if [[ $config_state -eq 0 ]]; then
         while IFS= read -r line; do
             # shellcheck disable=SC2295
             line="${line#"${line%%[![:space:]]*}"}"
@@ -327,8 +334,9 @@ manage_whitelist() {
 manage_whitelist_categories() {
     local mode="$1"
 
-    # Load currently enabled patterns from both sources
-    load_whitelist "$mode"
+    # Load currently enabled patterns from both sources. An unreadable file
+    # stops here: saving the menu would replace what the user wrote.
+    load_whitelist "$mode" || return 1
 
     # Build cache items list
     local -a cache_items=()

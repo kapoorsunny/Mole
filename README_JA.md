@@ -1,9 +1,11 @@
+<p align="right"><b>macOS</b> · <a href="https://github.com/tw93/Mole/tree/windows">Windows</a></p>
+
 <div align="center">
   <h1>Mole</h1>
   <p><b>Macのディープクリーン、アプリアンインストール、システム最適化、ディスク分析、ステータス監視。無料のオープンソースCLIと、ネイティブMacアプリ。</b></p>
-  <p><a href="README.md">English</a> · <a href="README_CN.md">中文</a> · <a href="README_TW.md">繁體</a> · 日本語 · <a href="README_KR.md">한국어</a> · <a href="README_DE.md">Deutsch</a> · <a href="README_FR.md">Français</a></p>
+  <p><a href="README.md">English</a> · <a href="README_CN.md">中文</a> · <a href="README_TW.md">繁體</a> · 日本語 · <a href="README_KR.md">한국어</a> · <a href="README_DE.md">Deutsch</a> · <a href="README_FR.md">Français</a> · <a href="README_UA.md">Українська</a> · <a href="README_RU.md">Русский</a></p>
   <a href="https://github.com/tw93/mole/stargazers"><img src="https://img.shields.io/github/stars/tw93/mole?style=flat-square" alt="Stars"></a>
-  <a href="https://github.com/tw93/mole/releases"><img src="https://img.shields.io/github/v/tag/tw93/mole?label=version&style=flat-square" alt="Version"></a>
+  <a href="https://github.com/tw93/mole/releases"><img src="https://img.shields.io/github/v/release/tw93/mole?label=version&style=flat-square" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL_v3-blue.svg?style=flat-square" alt="License"></a>
   <a href="https://github.com/tw93/mole/commits"><img src="https://img.shields.io/github/commit-activity/m/tw93/mole?style=flat-square" alt="Commits"></a>
   <a href="https://twitter.com/HiTw93"><img src="https://img.shields.io/badge/follow-Tw93-red?style=flat-square&logo=Twitter" alt="Twitter"></a>
@@ -14,12 +16,12 @@
   <img src="./docs/img/big-mole.png" alt="Mole クリーンアップ結果" width="1000" />
 </p>
 
-> 💡 このリポジトリは無料のオープンソースCLI（`mo`）です。ネイティブアプリがよければ、[Mole for Mac](https://mole.fit/) を別途ダウンロードできます。削除前の項目別確認、800以上のアプリで検証済みの残留ファイル削除、メンテナンス、ディスクの階層分析、リアルタイムのステータス表示、対応Macでのファン制御を備えています。`brew install mole` でインストールされるのはCLIのみです。
+> 💡 このリポジトリは無料のオープンソースCLI（`mo`）です。ネイティブアプリがよければ、[Mole for Mac](https://mole.fit/) を別途ダウンロードできます。削除前の項目別確認、800以上のアプリで検証済みの残留ファイル削除、メンテナンス、ディスクの階層分析、リアルタイムのステータス表示、対応Macでのファン制御を備えています。Windowsのネイティブアプリは [Mole for Windows](https://mole.fit/ja/windows) です。`brew install mole` でインストールされるのはCLIのみです。
 
 ## 機能
 
 - **オールインワンCLIツール**：CleanMyMac、AppCleaner、DaisyDisk、iStat Menus風のワークフローをひとつのターミナルコマンドに集約
-- **ディープクリーン**：キャッシュ、ログ、一時ファイル、アンインストール残留物を安全に削除して空き容量を確保
+- **ディープクリーン**：キャッシュ、ログ、一時ファイル、アンインストール残留物を削除して空き容量を確保
 - **スマートアンインストーラ**：アプリ本体とLaunchAgents、設定ファイル、関連残留物をまとめて削除
 - **ディスク分析**：インタラクティブTUIで容量内訳を可視化し、大容量ファイルを探索
 - **システム最適化**：DNSキャッシュのフラッシュ、QuickLook・アイコンキャッシュの再構築、システムデータベースの最適化
@@ -27,7 +29,7 @@
 
 ## クイックスタート
 
-MoleはmacOS 12以降に対応し、IntelおよびApple Silicon Macの双方をサポートします。お使いのmacOSでHomebrewが利用できない場合はスクリプトでインストールしてください。実験的なWindows版は [windowsブランチ](https://github.com/tw93/Mole/tree/windows) にあります。
+MoleはmacOS 12以降に対応し、IntelおよびApple Silicon Macの双方をサポートします。お使いのmacOSでHomebrewが利用できない場合はスクリプトでインストールしてください。
 
 **Homebrewでインストール**
 
@@ -40,6 +42,14 @@ brew install mole
 ```bash
 curl -fsSL https://raw.githubusercontent.com/tw93/mole/main/install.sh | bash
 ```
+
+**Windowsでインストール**（[Windows版CLI](https://github.com/tw93/Mole/tree/windows)）
+
+```powershell
+iwr -useb https://raw.githubusercontent.com/tw93/Mole/windows/quick-install.ps1 | iex
+```
+
+Moleの配布元はHomebrew、このGitHubリポジトリ、Mac版とWindows版の[mole.fit](https://mole.fit/)だけです。「Moleベース」をうたう別のアプリや、エンコードされたコマンドをターミナルに貼り付けるよう求めるサイトはMoleとは無関係です。
 
 **主要コマンド**
 
@@ -123,19 +133,20 @@ Moleはファイルを削除できるため、パスを検証し、共有の場�
 
 - `clean`、`uninstall`、`purge`、`installer`、`remove` はファイル削除を伴うため、事前に `--dry-run` で確認し、必要に応じて `--debug` を併用してください
 - 通常利用では **`sudo` 不要** で、システム領域のクリーン時のみ必要に応じて管理者権限を要求します
-- `mo analyze` で選択した項目は、確認後にmacOSのゴミ箱へ移動されます
+- `mo uninstall` と `mo analyze` は、確認後に削除項目を既定でゴミ箱へ移動します。`clean`、`purge`、`installer` は完全に削除し、`mo uninstall --permanent` はゴミ箱を経由しません
 - クリーンアップ履歴は `~/Library/Logs/mole/operations.log` に記録され、`mo history` で確認するか、`MO_NO_OPLOG=1` で無効化できます
 - `mo clean --whitelist` で保持したいキャッシュを保護し、`mo optimize --whitelist` で除外項目を設定できます
+- ホワイトリストファイルを読み取れない場合、`clean`、`purge`、`optimize` はそれなしで実行せずに停止します
 
 脆弱性の報告方法、安全上の境界、現在の制限は [SECURITY.md](SECURITY.md) および [SECURITY_AUDIT.md](SECURITY_AUDIT.md) をご覧ください。
 
 ## 機能詳細
 
-以下の表示例は抜粋です。実際の表示項目や容量はご利用のMac環境によって異なります。
+以下の表示例は抜粋です。実際の表示項目、容量、スキップ理由はご利用のMac環境によって異なります。
 
 ### ディープクリーン（Clean）
 
-`mo clean` は安全なキャッシュ、ログ、一時ファイル、開発ツールキャッシュ、アンインストール済みアプリの残留物を探索して削除します。既定でゴミ箱を空にするので、残したい場合は `mo clean --whitelist` で Trash を選択してください。同じメニューで保持したいキャッシュも保護でき、選択内容は `~/.config/mole/whitelist` に保存されます。独自のパスを追加する前に、メニューを開いてEnterで選択内容を保存し、そのあと1行に1パスずつ追記してください。ファイルが存在するとオプションの標準ルールは置き換えられますが、組み込みの安全保護は引き続き有効です。
+`mo clean` は安全なキャッシュ、ログ、一時ファイル、開発ツールキャッシュ、アンインストール済みアプリの残留物を探索して削除します。既定で `~/.Trash` を空にするので、残したい場合は `mo clean --whitelist` で Trash を選択してください。同じメニューで保持したいキャッシュも保護でき、`/Volumes/*/.Trashes` などのボリュームのゴミ箱は一緒には空になりません。選択内容は `~/.config/mole/whitelist` に保存されます。独自のパスを追加する前に、メニューを開いてEnterで選択内容を保存し、そのあと1行に1パスずつ追記してください。ファイルが存在するとオプションの標準ルールは置き換えられますが、組み込みの安全保護は引き続き有効です。
 
 ```text
 $ mo clean
@@ -171,6 +182,8 @@ Free space: 223.5GB (+4.5GB)
 
 `mo uninstall` はインストール済みアプリと、Moleがそのアプリのものだと特定できる関連ファイルを削除します。同じアプリの別のインストールがまだ使っている共有ファイルは保持されます。アプリがすでに削除済みの場合は、`mo clean` で残留ファイルを探せます。
 
+設定やプラグインなどの個人データは標準で保持されます。削除プレビューで `D` を押すと、削除するデータのパスを個別に選べます。削除後、shell・Hook・MCP 設定に削除済みパスへの参照が見つかった場合は、ファイル名と行番号だけを表示し、設定は変更しません。
+
 ```text
 $ mo uninstall
 
@@ -182,14 +195,18 @@ Select Apps to Remove  1/3 selected
 
 Files to be removed:
 
-✓ Photoshop 2024, 12.80GB
+✓ Photoshop 2024, 4.20GB
   ✓ /Applications/Adobe Photoshop 2024/Adobe Photoshop 2024.app
-  ✓ ~/Library/Application Support/Adobe/Adobe Photoshop 2024
-  ✓ ~/Library/Preferences/com.adobe.Photoshop.plist
+
+Personal data kept:
+  ~/Library/Application Support/Adobe/Adobe Photoshop 2024
+  ~/Library/Preferences/com.adobe.Photoshop.plist
+
+D choose personal data
 
 ======================================================================
 Uninstall complete
-Removed 1 app, freed 12.80GB: Photoshop 2024
+Removed 1 app, freed 4.20GB: Photoshop 2024
 ======================================================================
 ```
 
@@ -207,30 +224,29 @@ Optimize
 PERFORMANCE DIAGNOSIS
   ✓ No sustained high-CPU bottleneck detected
 
-➤ DNS & Spotlight Check
-  → DNS cache flushed
-  → Spotlight index verified
-
 ➤ Finder Cache Refresh
   → QuickLook thumbnails refreshed
   → Icon services cache rebuilt
+
+➤ Network Cache Refresh
+  → DNS cache refreshed
 
 ➤ Database Optimization
   ◎ Close these apps before database optimization: Safari
 
 ➤ Disk Health
-  → Disk verify skipped (set MOLE_ENABLE_DISK_VERIFY=1 to enable)
+  → Disk verify skipped
 
 ======================================================================
 Optimization Complete
-Applied 3 optimizations
-14 unchanged | 3 skipped | 1 unavailable
+Applied 2 optimizations
+13 unchanged | 3 skipped | 1 unavailable
 ======================================================================
 ```
 
 ### ディスク分析（Analyze）
 
-`mo analyze` はターミナル内で動作するインタラクティブなディスク探索ツールです。矢印キーやVimキーバインドでの移動、絞り込み、複数選択、Finderプレビュー、ゴミ箱への移動に対応しています。外付けドライブは通常画面から除外されており、`mo analyze /Volumes` で確認できます。`mo analyze /private/tmp` を使うと、ユーザー所有の一時ファイルを自動クリーンアップの対象にせずに確認できます。
+`mo analyze` はターミナル内で動作するインタラクティブなディスク探索ツールです。矢印キーやVimキーバインドでの移動、絞り込み、複数選択、Finderプレビュー、ゴミ箱への移動に対応しています。外付けドライブは通常画面から除外されており、`mo analyze /Volumes` または特定のマウントパスで確認できます。`mo analyze /private/tmp` を使うと、ユーザー所有の一時ファイルを自動クリーンアップの対象にせずに確認できます。ファイル単位のスキャンでは、すべてのブロックを共有するAPFSクローンを1回だけ計上します。フォルダの高速推計では共有ブロックが重複して計上される場合があります。
 
 サイズの末尾に `+` が付く場合は部分スキャンで計測できたバイト数、`unknown` はサイズを計測できなかったことを示します。タイムアウトなど一時的な失敗で中断した結果は、完全なキャッシュ済みの計測値を上書きせず、後の再スキャンで欠けたデータを補えます。macOSがターミナルからの読み取りを許可しないフォルダは、アクセス権が変わるまで部分スキャンのままです。ターミナルの一覧は大きい順に30件までなので、読み取れない項目が一覧から外れることがありますが、その場合も合計は部分スキャンとして表示されます。ディレクトリのJSON出力にはスキャンしたすべての項目が含まれます。
 
@@ -290,6 +306,20 @@ Proxy   HTTP · 192.168.1.100             Chrome     ▮▮▮▯▯  28.3%
 - `mo history --json`：クリーンアップ履歴をJSONで出力。各セッションには `run_id`（不透明な文字列で、識別情報が記録されていない場合は空）と `attribution` が含まれ、識別できた実行は `run`、旧来のコマンド単位のグループ化は `command`、旧形式のマーカーでは中断と実行の重なりを区別できない場合は `ambiguous` になります。記録されたアクションは引き続き参照できますが、`ambiguous` の件数を個々の実行に正しく割り当てることはできません。`ended_at` が空の場合は終了マーカーが記録されていません。
 
 ```text
+$ mo analyze --json ~/Documents
+{
+  "path": "/Users/you/Documents",
+  "overview": false,
+  "entries": [
+    { "name": "Library", "path": "...", "size": 80939438080, "is_dir": true }
+  ],
+  "large_files": [
+    { "name": "backup.zip", "path": "...", "size": 8796093022 }
+  ],
+  "total_size": 168393441280,
+  "total_files": 42187
+}
+
 $ mo status --json
 {
   "host": "MacBook-Pro",
