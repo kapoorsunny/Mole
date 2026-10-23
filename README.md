@@ -43,13 +43,19 @@ brew install mole
 curl -fsSL https://raw.githubusercontent.com/tw93/mole/main/install.sh | bash
 ```
 
-**On Windows** ([Windows CLI](https://github.com/tw93/Mole/tree/windows))
+**With an AI agent**
 
-```powershell
-iwr -useb https://raw.githubusercontent.com/tw93/Mole/windows/quick-install.ps1 | iex
+Tell your agent:
+
+> Install Mole for me by reading https://raw.githubusercontent.com/tw93/Mole/main/llms.txt
+
+Or install the skill yourself. With it, Claude Code, Codex, Cursor and other agents show every cleanup with `--dry-run` before anything is removed, and leave app uninstalls and administrator steps to you. Update with `npx skills update -g -y`.
+
+```bash
+npx skills add tw93/Mole -a claude-code codex cursor -g -y
 ```
 
-Mole is only distributed through Homebrew, this GitHub repository, and [mole.fit](https://mole.fit/) for the Mac and Windows apps. Sites offering a "Mole-based" app or asking you to paste an encoded command into Terminal are not affiliated with Mole.
+As a host plugin: `/plugin marketplace add tw93/Mole` then `/plugin install mole@mole` in Claude Code, or `codex plugin marketplace add tw93/Mole` then `codex plugin add mole@mole` in Codex.
 
 **Run**
 
@@ -62,6 +68,7 @@ mo analyze                   # Visual disk explorer (or 'mo analyse')
 mo status                    # Live system health dashboard
 mo purge                     # Clean project build artifacts
 mo installer                 # Find and remove installer files
+mo slim                      # Remove Intel code from universal apps
 
 mo touchid                   # Configure Touch ID for sudo
 mo completion                # Set up shell tab completion
@@ -80,6 +87,7 @@ mo uninstall --dry-run
 mo optimize --dry-run
 mo purge --dry-run
 mo installer --dry-run
+mo slim --dry-run
 mo history
 mo history --json
 
@@ -127,13 +135,21 @@ For a declarative installation, add `github:tw93/mole/main` as a flake input and
 
 </details>
 
+**On Windows** ([Windows CLI](https://github.com/tw93/Mole/tree/windows))
+
+```powershell
+iwr -useb https://raw.githubusercontent.com/tw93/Mole/windows/quick-install.ps1 | iex
+```
+
+Mole is only distributed through Homebrew, this repository and [mole.fit](https://mole.fit/). `molemac.com`, `moleapp.net` and `molefit.com` are not Mole, and the Windows app at `mole.bluecatbot.com` is a separate community project.
+
 ## Safety
 
 Mole can remove files, so it validates paths, protects shared and system-owned locations, and asks for confirmation when an action needs it. When Mole cannot prove an item is safe to change, it skips or refuses it.
 
-- `clean`, `uninstall`, `purge`, `installer`, and `remove` can delete files, so review them with `--dry-run` first and add `--debug` when needed
+- `clean`, `uninstall`, `purge`, `installer`, `slim`, and `remove` can delete files, so review them with `--dry-run` first and add `--debug` when needed
 - Run Mole without `sudo`; it requests administrator access only when needed
-- `mo uninstall` and `mo analyze` route deletions to Trash by default after confirmation; `clean`, `purge`, and `installer` delete permanently. `mo uninstall --permanent` skips Trash
+- `mo uninstall`, `mo analyze`, and `mo slim` route deletions to Trash by default after confirmation; `clean`, `purge`, and `installer` delete permanently. `mo uninstall --permanent` skips Trash
 - Cleanup activity is recorded in `~/Library/Logs/mole/operations.log`; review it with `mo history` or disable it with `MO_NO_OPLOG=1`
 - Protect caches with `mo clean --whitelist`, or maintenance items with `mo optimize --whitelist`
 - If the whitelist file cannot be read, `clean`, `purge`, and `optimize` stop instead of running without it
@@ -182,7 +198,7 @@ Free space: 223.5GB (+4.5GB)
 
 `mo uninstall` removes an installed app together with related files that Mole can tie back to that app. It keeps shared data when another installed copy still uses it. If the app is already gone, use `mo clean` to look for leftovers.
 
-Personal data, including settings and plugins, is kept by default. Press `D` in the removal preview to select individual data paths. After removal, references in shell, Hook, or MCP configuration are listed by file and line only; Mole does not edit those configurations.
+Personal data, including settings and plugins, is kept by default. Press `D` in the removal preview to select individual data paths. `mo uninstall --with-data` starts with that data selected, except browser profiles and App Group containers; the preview lists it separately and `D` still lets you keep any path. After removal, references in shell, Hook, or MCP configuration are listed by file and line only; Mole does not edit those configurations.
 
 ```text
 $ mo uninstall
@@ -304,6 +320,7 @@ The health score combines CPU, memory, disk capacity, SMART status, I/O, thermal
 - `mo status | jq '.health_score'` switches to JSON automatically when output is piped
 - `mo status --watch --interval 2s` streams newline-delimited JSON from a warm collector
 - `mo history --json` returns cleanup activity as JSON. Sessions include `run_id` (an opaque string, empty when no identity was logged) and `attribution`: `run` for identified runs, `command` for legacy command-based grouping, or `ambiguous` when legacy markers cannot distinguish interruption from overlapping runs. Recorded actions remain available; ambiguous counts cannot be assigned reliably to individual runs. An empty `ended_at` means no end marker was recorded
+- `mo uninstall --list` returns installed apps as JSON with `name`, `bundle_id`, `source`, `uninstall_name`, `path` and `size`
 
 ```text
 $ mo analyze --json ~/Documents
@@ -425,6 +442,10 @@ Removed 5 installers, freed 3.83GB
 ```
 
 </details>
+
+### Slim
+
+`mo slim` removes the Intel code that universal apps carry on Apple Silicon Macs. It lists the apps you own that are signed with a Developer ID, with the size of each app's Intel code, and changes only the apps you select. Each app is slimmed on a copy, touching only main executables and nested code that carries its own signature; the copy replaces the app only after it keeps its Apple Silicon code and passes code signing and Gatekeeper checks, and the original moves to the Trash. App Store apps, Apple apps, apps set to open using Rosetta, apps owned by another user, and running apps are left alone. It needs no developer tools, and an app update brings the Intel code back.
 
 ## Quick Launchers
 

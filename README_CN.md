@@ -43,13 +43,19 @@ brew install mole
 curl -fsSL https://raw.githubusercontent.com/tw93/mole/main/install.sh | bash
 ```
 
-**Windows 上安装**（[Windows CLI](https://github.com/tw93/Mole/tree/windows)）
+**用 AI Agent 安装**
 
-```powershell
-iwr -useb https://raw.githubusercontent.com/tw93/Mole/windows/quick-install.ps1 | iex
+直接告诉你的 Agent：
+
+> Install Mole for me by reading https://raw.githubusercontent.com/tw93/Mole/main/llms.txt
+
+也可以自己装 skill，装上后 Claude Code、Codex、Cursor 等 Agent 删东西前会先用 `--dry-run` 把清单给你看，卸载 App 和要管理员权限的步骤留给你自己跑，更新用 `npx skills update -g -y`。
+
+```bash
+npx skills add tw93/Mole -a claude-code codex cursor -g -y
 ```
 
-Mole 只通过 Homebrew、这个 GitHub 仓库和 Mac 版、Windows 版官网 [mole.fit](https://mole.fit/) 发布，自称基于 Mole 的其他 App，或者让你往终端里粘贴一段编码命令的网站，都和 Mole 无关。
+喜欢用宿主自带的插件管理，Claude Code 里先 `/plugin marketplace add tw93/Mole` 再 `/plugin install mole@mole`，Codex 里先 `codex plugin marketplace add tw93/Mole` 再 `codex plugin add mole@mole`。
 
 **常用命令**
 
@@ -62,6 +68,7 @@ mo analyze                   # 磁盘空间浏览（也可写 mo analyse）
 mo status                    # 实时系统健康看板
 mo purge                     # 清理项目构建产物
 mo installer                 # 查找并删除安装包
+mo slim                      # 移除通用应用里的 Intel 代码
 
 mo touchid                   # 配置终端 Touch ID 指纹提权
 mo completion                # 配置命令行 Tab 键自动补全
@@ -80,6 +87,7 @@ mo uninstall --dry-run
 mo optimize --dry-run
 mo purge --dry-run
 mo installer --dry-run
+mo slim --dry-run
 mo history
 mo history --json
 
@@ -127,13 +135,21 @@ nix profile remove mole
 
 </details>
 
+**Windows 上安装**（[Windows CLI](https://github.com/tw93/Mole/tree/windows)）
+
+```powershell
+iwr -useb https://raw.githubusercontent.com/tw93/Mole/windows/quick-install.ps1 | iex
+```
+
+Mole 只通过 Homebrew、这个仓库和 [mole.fit](https://mole.fit/) 发布，`molemac.com`、`moleapp.net`、`molefit.com` 都不是 Mole，`mole.bluecatbot.com` 上的 Windows App 是同名的社区项目。
+
 ## 安全机制
 
 Mole 会删除文件，所以会先校验路径、保护共享和系统目录，需要时才请你确认，无法确认安全的项目一律跳过或拒绝。
 
-- `clean`、`uninstall`、`purge`、`installer` 与 `remove` 会删除文件，可先用 `--dry-run` 预览，需要时加上 `--debug`
+- `clean`、`uninstall`、`purge`、`installer`、`slim` 与 `remove` 会删除文件，可先用 `--dry-run` 预览，需要时加上 `--debug`
 - 日常运行 **无需 `sudo`**，仅在触及系统级清理时按需请求管理员权限
-- `mo uninstall` 与 `mo analyze` 在确认后默认将删除项移入废纸篓；`clean`、`purge` 与 `installer` 为永久删除，`mo uninstall --permanent` 可跳过废纸篓
+- `mo uninstall`、`mo analyze` 与 `mo slim` 在确认后默认将删除项移入废纸篓；`clean`、`purge` 与 `installer` 为永久删除，`mo uninstall --permanent` 可跳过废纸篓
 - 清理操作记录在 `~/Library/Logs/mole/operations.log` 中，可通过 `mo history` 查看，或设置 `MO_NO_OPLOG=1` 禁用
 - 可通过 `mo clean --whitelist` 保护指定缓存，或使用 `mo optimize --whitelist` 排除维护项
 - 白名单文件无法读取时，`clean`、`purge` 和 `optimize` 会直接停止，不会在没有白名单的情况下继续执行
@@ -182,7 +198,7 @@ Free space: 223.5GB (+4.5GB)
 
 `mo uninstall` 移除已安装的应用，以及 Mole 能确认属于这个应用的相关文件；若同一应用的另一个已安装副本仍在使用这些文件，会自动保留，应用此前已被手动删除的话，运行 `mo clean` 扫描残留。
 
-设置、插件等个人数据默认保留，在卸载预览页按 `D` 可逐项选择要删除的数据路径，卸载后若发现 shell、Hook 或 MCP 配置仍引用已删除的路径，只提示文件和行号，不修改配置。
+设置、插件等个人数据默认保留，在卸载预览页按 `D` 可逐项选择要删除的数据路径，用 `mo uninstall --with-data` 时这些数据会预先选中，浏览器配置文件与 App Group 容器除外，预览里单独列出，仍可按 `D` 保留任意路径，卸载后若发现 shell、Hook 或 MCP 配置仍引用已删除的路径，只提示文件和行号，不修改配置。
 
 ```text
 $ mo uninstall
@@ -304,6 +320,7 @@ Proxy   HTTP · 192.168.1.100             Chrome     ▮▮▮▯▯  28.3%
 - `mo status | jq '.health_score'`：当输出被管道重定向时自动切换为 JSON 模式
 - `mo status --watch --interval 2s`：持续流式输出 NDJSON（换行分隔的 JSON）
 - `mo history --json`：以 JSON 格式输出历史清理日志。每个会话带有 `run_id`（不透明字符串，没有记录身份时为空）和 `attribution`，能识别的运行是 `run`，旧版按命令分组的是 `command`，旧标记分不清中断和重叠运行时是 `ambiguous`。记录下来的操作仍然都能看到，但 `ambiguous` 的计数没法可靠地分到单次运行上。`ended_at` 为空表示没有记录到结束标记
+- `mo uninstall --list`：以 JSON 输出已安装应用，字段为 `name`、`bundle_id`、`source`、`uninstall_name`、`path` 和 `size`
 
 ```text
 $ mo analyze --json ~/Documents
@@ -417,6 +434,10 @@ Removed 5 installers, freed 3.83GB
 ```
 
 </details>
+
+### 应用瘦身（Slim）
+
+`mo slim` 在 Apple Silicon Mac 上移除通用应用里的 Intel 代码。它列出归你所有、使用 Developer ID 签名的应用及各自的 Intel 代码大小，只处理你选中的应用。每个应用先在副本上瘦身，只动主程序和自带签名的嵌套代码，副本保留 Apple Silicon 代码并通过代码签名与 Gatekeeper 检查后才替换原应用，原应用移入废纸篓。App Store 应用、Apple 应用、设为使用 Rosetta 打开的应用、属于其他用户的应用以及正在运行的应用都不会处理。不需要安装开发工具，应用更新后 Intel 代码会回来。
 
 ## 快捷启动器
 

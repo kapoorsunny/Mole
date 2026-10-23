@@ -2487,6 +2487,8 @@ func TestLiveScanDefaultCursorStaysOnFirstRowAcrossReorder(t *testing.T) {
 		result: scanResult{TotalSize: 10},
 	})
 	m = updated.(model)
+	updated, _ = m.Update(tickMsg(time.Now()))
+	m = updated.(model)
 	if got := []string{m.entries[0].Path, m.entries[1].Path}; !slices.Equal(got, []string{b, a}) {
 		t.Fatalf("expected live sort to reorder by size, got %v", got)
 	}
@@ -2582,7 +2584,11 @@ func TestLiveScanContinuousSortKeepsCursorByPath(t *testing.T) {
 		result: scanResult{TotalSize: 10},
 	})
 	m = updated.(model)
+	updated, _ = m.Update(tickMsg(time.Now()))
+	m = updated.(model)
 	updated, _ = m.updateKey(tea.KeyMsg{Type: tea.KeyDown})
+	m = updated.(model)
+	updated, _ = m.Update(tickMsg(time.Now()))
 	m = updated.(model)
 	if m.entries[m.selected].Path != a {
 		t.Fatalf("expected selection to move to a before reorder, got selected=%d entries=%+v", m.selected, m.entries)
@@ -2595,6 +2601,8 @@ func TestLiveScanContinuousSortKeepsCursorByPath(t *testing.T) {
 		entry:  dirEntry{Name: "a", Path: a, Size: 100, IsDir: true},
 		result: scanResult{TotalSize: 100},
 	})
+	m = updated.(model)
+	updated, _ = m.Update(tickMsg(time.Now()))
 	m = updated.(model)
 	if got := []string{m.entries[0].Path, m.entries[1].Path}; !slices.Equal(got, []string{a, b}) {
 		t.Fatalf("expected live sort to continue after navigation, got %v", got)
@@ -2629,7 +2637,11 @@ func TestLiveScanSortCanFreezeAfterNavigationKey(t *testing.T) {
 		result: scanResult{TotalSize: 10},
 	})
 	m = updated.(model)
+	updated, _ = m.Update(tickMsg(time.Now()))
+	m = updated.(model)
 	updated, _ = m.updateKey(tea.KeyMsg{Type: tea.KeyDown})
+	m = updated.(model)
+	updated, _ = m.Update(tickMsg(time.Now()))
 	m = updated.(model)
 	if m.autoSortLiveEntries {
 		t.Fatalf("expected freeze-on-move to disable live sort")
@@ -2643,6 +2655,8 @@ func TestLiveScanSortCanFreezeAfterNavigationKey(t *testing.T) {
 		entry:  dirEntry{Name: "a", Path: a, Size: 100, IsDir: true},
 		result: scanResult{TotalSize: 100},
 	})
+	m = updated.(model)
+	updated, _ = m.Update(tickMsg(time.Now()))
 	m = updated.(model)
 	after := []string{m.entries[0].Path, m.entries[1].Path}
 	if !slices.Equal(before, after) {
@@ -3733,10 +3747,16 @@ func TestPartialScanCoverageSurvivesEntryLimit(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
 	m := newModel(root, false)
 	msg := runScanResultCmd(t, m.scanFreshCmd(root))
-	if msg.err != nil || msg.result.State != scanPartial || msg.result.TotalSize != int64(maxEntries*4096) || len(msg.result.Entries) != maxEntries {
-		t.Fatalf("limited view lost aggregate coverage: %+v", msg)
+	if msg.err != nil || msg.result.State != scanPartial || msg.result.TotalSize != int64(maxEntries*4096) || len(msg.result.Entries) != maxEntries+1 {
+		t.Fatalf("live listing lost entries or aggregate coverage: %+v", msg)
 	}
-	for _, entry := range msg.result.Entries {
+	// Recursive summaries still retain only the largest rows, while carrying
+	// aggregate coverage for the unavailable entries they leave out.
+	summary, err := scanPathConcurrent(context.Background(), root, m.filesScanned, m.dirsScanned, m.bytesScanned, m.currentPath)
+	if err != nil || summary.State != scanPartial || summary.TotalSize != msg.result.TotalSize || len(summary.Entries) != maxEntries {
+		t.Fatalf("bounded summary lost aggregate coverage: %+v, %v", summary, err)
+	}
+	for _, entry := range summary.Entries {
 		if entry.Path == locked {
 			t.Fatal("unknown entry displaced a larger measured entry")
 		}

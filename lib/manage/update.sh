@@ -560,6 +560,60 @@ get_latest_version_from_github() {
     return 0
 }
 
+# /usr/bin/git is a stub until the Command Line Tools are installed, and
+# running it opens their installer. Plain assignments so a test can point both
+# at fixtures after sourcing.
+MOLE_SYSTEM_GIT_STUB="/usr/bin/git"
+MOLE_XCODE_SELECT_BIN="/usr/bin/xcode-select"
+
+# Succeeds when a git lookup cannot pop up the Command Line Tools installer.
+mole_git_runs_quietly() {
+    local git_bin
+    git_bin=$(command -v git 2> /dev/null) || return 1
+    [[ "$git_bin" == "$MOLE_SYSTEM_GIT_STUB" ]] || return 0
+    "$MOLE_XCODE_SELECT_BIN" -p > /dev/null 2>&1
+}
+
+get_latest_version_from_git() {
+    if ! mole_git_runs_quietly; then
+        return 0
+    fi
+    local response tag version=""
+    if response=$(run_with_timeout "$MOLE_TIMEOUT_MEDIUM_PROBE_SEC" \
+        /usr/bin/env \
+        -u GIT_CONFIG_PARAMETERS \
+        -u GIT_EXEC_PATH \
+        -u GIT_DIR \
+        -u GIT_WORK_TREE \
+        -u GIT_COMMON_DIR \
+        -u GIT_CONFIG \
+        -u GIT_PROXY_COMMAND \
+        -u GIT_SSH \
+        -u GIT_SSH_COMMAND \
+        -u GIT_SSL_NO_VERIFY \
+        GIT_TERMINAL_PROMPT=0 \
+        GIT_ASKPASS=/usr/bin/false \
+        SSH_ASKPASS=/usr/bin/false \
+        GIT_CONFIG_NOSYSTEM=1 \
+        GIT_CONFIG_GLOBAL=/dev/null \
+        GIT_CONFIG_COUNT=0 \
+        LC_ALL=C \
+        git -c credential.helper= -c core.askPass=/usr/bin/false \
+        -c protocol.allow=never -c protocol.https.allow=always \
+        -c http.sslVerify=true -C / \
+        ls-remote --tags --refs https://github.com/tw93/mole.git \
+        2> /dev/null); then
+        tag=$(printf '%s\n' "$response" |
+            awk -F/ '{print $NF}' |
+            grep -E '^V[0-9]+\.[0-9]+\.[0-9]+$' |
+            sort -V |
+            tail -n 1)
+        version="${tag#[Vv]}"
+    fi
+    [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] && printf '%s\n' "$version"
+    return 0
+}
+
 # Foreground `mo update` version discovery. The single-shot helpers above stay
 # fast because background notices must not delay commands; an
 # explicit update is worth a bounded retry instead, since the same proxy reset
@@ -572,6 +626,7 @@ resolve_latest_stable_version() {
     while true; do
         candidate=$(get_latest_version_from_github)
         [[ -z "$candidate" ]] && candidate=$(get_latest_version)
+        [[ -z "$candidate" ]] && candidate=$(get_latest_version_from_git)
         if [[ -n "$candidate" ]]; then
             printf '%s\n' "$candidate"
             return 0
@@ -772,7 +827,7 @@ get_latest_commit_from_github() {
 
     # The unauthenticated API can be rate-limited even while ordinary GitHub
     # access works. Keep the fallback bounded and accept only main's exact SHA.
-    if command -v git > /dev/null 2>&1; then
+    if mole_git_runs_quietly; then
         # Ignore ambient credential helpers and URL rewrites: this public,
         # read-only probe must resolve the literal GitHub remote or fail.
         if response=$(run_with_timeout "$MOLE_TIMEOUT_MEDIUM_PROBE_SEC" \
@@ -1113,6 +1168,7 @@ show_help() {
     printf "  %s%-28s%s %s\n" "$GREEN" "mo history --json" "$NC" "Export cleanup history"
     printf "  %s%-28s%s %s\n" "$GREEN" "mo purge --dry-run" "$NC" "Preview project purge"
     printf "  %s%-28s%s %s\n" "$GREEN" "mo installer --dry-run" "$NC" "Preview installer cleanup"
+    printf "  %s%-28s%s %s\n" "$GREEN" "mo slim --dry-run" "$NC" "Preview Intel code removal"
     printf "  %s%-28s%s %s\n" "$GREEN" "mo touchid enable --dry-run" "$NC" "Preview Touch ID setup"
     printf "  %s%-28s%s %s\n" "$GREEN" "mo completion --dry-run" "$NC" "Preview shell completion edits"
     printf "  %s%-28s%s %s\n" "$GREEN" "mo purge --paths" "$NC" "Configure scan directories"
@@ -1130,7 +1186,6 @@ show_help() {
 update_mole() (
     local force_update="${1:-false}"
     local nightly_update="${2:-false}"
-    local update_interrupted=false
     local sudo_keepalive_pid=""
     local UPDATE_LOCK_CONTROL=""
     local UPDATE_LOCK_HOLDER_PID=""
@@ -1144,7 +1199,7 @@ update_mole() (
                 "$UPDATE_LOCK_CONTROL" "$UPDATE_LOCK_HOLDER_PID" "$UPDATE_LOCK_ACQUIRED"
         fi
     }
-    trap '_update_cleanup; update_interrupted=true; echo ""; exit 130' INT TERM
+    trap '_update_cleanup; echo ""; exit 130' INT TERM
     trap '_update_cleanup' EXIT
 
     if is_nix_install; then

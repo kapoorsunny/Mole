@@ -1122,6 +1122,9 @@ _scan_resolve_uncached() {
 # The dedupe key includes the .app basename so distinct installs that share a
 # bundle ID (e.g. Xcode.app and Xcode-beta.app, both com.apple.dt.Xcode) are
 # kept, while true clones of the same bundle name in mirrored roots collapse.
+# A hidden bundle (.Aegis-backup-1.app, left by a manual reinstall) folds into
+# a visible app with the same bundle ID, so name matching cannot pick the
+# backup over the live install (#1791); a hidden app with no visible twin stays.
 _scan_dedupe_bundle_ids() {
     [[ -s "$scan_raw_file" ]] || return 0
 
@@ -1153,6 +1156,12 @@ _scan_dedupe_bundle_ids() {
             n = split(path, parts, "/")
             return parts[n]
         }
+        NR == FNR {
+            if ($3 != "" && $3 != "unknown" && substr(app_basename($1), 1, 1) != "." && !($3 in visible_key)) {
+                visible_key[$3] = $3 "|" app_basename($1)
+            }
+            next
+        }
         {
             bundle_id = $3
             if (bundle_id == "" || bundle_id == "unknown") {
@@ -1164,6 +1173,10 @@ _scan_dedupe_bundle_ids() {
 
             key = bundle_id "|" app_basename($1)
             rank = path_rank($1)
+            if (substr(app_basename($1), 1, 1) == "." && (bundle_id in visible_key)) {
+                key = visible_key[bundle_id]
+                rank = 9
+            }
             if (!(key in rows)) {
                 rows[key] = $0
                 ranks[key] = rank
@@ -1183,7 +1196,7 @@ _scan_dedupe_bundle_ids() {
                 }
             }
         }
-    ' "$scan_raw_file" > "$deduped_file"; then
+    ' "$scan_raw_file" "$scan_raw_file" > "$deduped_file"; then
         rm -f "$deduped_file" 2> /dev/null || true
         return 0
     fi
@@ -2000,6 +2013,8 @@ main() {
     # Default to Trash routing so an accidental uninstall is recoverable.
     # The caller can opt back into rm -rf with --permanent. See #723.
     export MOLE_DELETE_MODE="${MOLE_DELETE_MODE:-trash}"
+    # Only the --with-data flag preselects personal data, never the environment.
+    MOLE_UNINSTALL_WITH_DATA=0
 
     # Parse flags and collect app name arguments
     local -a app_name_args=()
@@ -2018,6 +2033,9 @@ main() {
                 ;;
             "--permanent")
                 export MOLE_DELETE_MODE="permanent"
+                ;;
+            "--with-data")
+                MOLE_UNINSTALL_WITH_DATA=1
                 ;;
             "--list")
                 list_mode=1

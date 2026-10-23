@@ -372,8 +372,11 @@ is_safe_pnpm_store_path() {
 }
 
 # Emit candidate pnpm binaries already installed locally. Never downloads.
-# Order: PATH pnpm first, then mise versioned installs. Callers dedupe by
-# resolved store path (issue #1370).
+# Order: PATH pnpm first, then the standalone install's PNPM_HOME (default
+# ~/Library/pnpm, put on PATH only by the user's shell profile, so a cron,
+# launchd or agent run of `mo clean` never saw it and left its store
+# unmentioned), then mise versioned installs. Callers dedupe by resolved
+# store path (issue #1370).
 # shellcheck disable=SC2329
 list_installed_pnpm_binaries() {
     local bin=""
@@ -387,6 +390,21 @@ list_installed_pnpm_binaries() {
             printf '%s\n' "pnpm"
         fi
     fi
+
+    local home_dir home_bin
+    local -a seen_bins=("$bin")
+    for home_dir in "${PNPM_HOME:-}" "$HOME/Library/pnpm"; do
+        [[ -n "$home_dir" ]] || continue
+        home_bin="${home_dir%/}/pnpm"
+        [[ -f "$home_bin" && -x "$home_bin" ]] || continue
+        local seen_bin already=false
+        for seen_bin in "${seen_bins[@]}"; do
+            [[ "$seen_bin" != "$home_bin" ]] || already=true
+        done
+        [[ "$already" == false ]] || continue
+        seen_bins+=("$home_bin")
+        printf '%s\n' "$home_bin"
+    done
 
     local mise_root="$HOME/.local/share/mise/installs/pnpm"
     if [[ -d "$mise_root" ]]; then
@@ -1606,32 +1624,33 @@ _MOLE_XCODE_PROCESS_MATCH=""
 # launchd-managed services that can remain alive after Simulator exits, so
 # their existence alone is not evidence that a simulator is active (#1319).
 _coresimulator_cache_process_running() {
-    local match_mode match_pattern match_label probe_status
+    local name pid running listing probe_status=0
     _MOLE_XCODE_PROCESS_MATCH=""
 
-    while IFS='|' read -r match_mode match_pattern match_label; do
-        [[ -n "$match_pattern" ]] || continue
-        if pgrep "$match_mode" "$match_pattern" > /dev/null 2>&1; then
-            _MOLE_XCODE_PROCESS_MATCH="$match_label"
-            debug_log "CoreSimulator process detected: $match_label"
-            return 0
-        else
-            probe_status=$?
-        fi
-        if [[ $probe_status -ne 1 ]]; then
-            debug_log "CoreSimulator process check failed: $match_label (exit=$probe_status)"
-            return 2
-        fi
-    done << 'EOF'
--x|Xcode|Xcode
--x|Simulator|Simulator
--x|xcodebuild|xcodebuild
--x|xctest|xctest
--x|XCTRunner|XCTRunner
--x|simctl|simctl
-EOF
+    mole_pgrep_any -x Xcode -x Simulator -x xcodebuild -x xctest \
+        -x XCTRunner -x simctl || probe_status=$?
+    if [[ $probe_status -eq 1 ]]; then
+        return 1
+    elif [[ $probe_status -ne 0 ]]; then
+        debug_log "CoreSimulator process check failed (exit=$probe_status)"
+        return 2
+    fi
 
-    return 1
+    # Name the first running owner in probe order for the skip message.
+    local label_status=0
+    listing=$(pgrep -lx 'Xcode|Simulator|xcodebuild|xctest|XCTRunner|simctl' 2> /dev/null) || label_status=$?
+    debug_log "CoreSimulator owner name probe exit=$label_status"
+    for name in Xcode Simulator xcodebuild xctest XCTRunner simctl; do
+        while read -r pid running; do
+            if [[ "$running" == "$name" ]]; then
+                _MOLE_XCODE_PROCESS_MATCH="$name"
+                break 2
+            fi
+        done <<< "$listing"
+    done
+    _MOLE_XCODE_PROCESS_MATCH="${_MOLE_XCODE_PROCESS_MATCH:-Xcode or Simulator tools}"
+    debug_log "CoreSimulator process detected: $_MOLE_XCODE_PROCESS_MATCH"
+    return 0
 }
 
 # Return 0 when simctl reports a booted device, 1 for a valid empty result, and

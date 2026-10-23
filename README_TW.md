@@ -43,13 +43,19 @@ brew install mole
 curl -fsSL https://raw.githubusercontent.com/tw93/mole/main/install.sh | bash
 ```
 
-**Windows 上安裝**（[Windows CLI](https://github.com/tw93/Mole/tree/windows)）
+**用 AI Agent 安裝**
 
-```powershell
-iwr -useb https://raw.githubusercontent.com/tw93/Mole/windows/quick-install.ps1 | iex
+直接告訴你的 Agent：
+
+> Install Mole for me by reading https://raw.githubusercontent.com/tw93/Mole/main/llms.txt
+
+也可以自己裝 skill，裝上後 Claude Code、Codex、Cursor 等 Agent 刪除前會先用 `--dry-run` 把清單給你看，解除安裝 App 與需要管理員權限的步驟留給你自己執行，更新用 `npx skills update -g -y`。
+
+```bash
+npx skills add tw93/Mole -a claude-code codex cursor -g -y
 ```
 
-Mole 只透過 Homebrew、這個 GitHub 倉庫和 Mac 版、Windows 版官網 [mole.fit](https://mole.fit/) 發布，自稱基於 Mole 的其他 App，或要你往終端機貼上一段編碼指令的網站，都和 Mole 無關。
+習慣用宿主內建的外掛管理，Claude Code 裡先 `/plugin marketplace add tw93/Mole` 再 `/plugin install mole@mole`，Codex 裡先 `codex plugin marketplace add tw93/Mole` 再 `codex plugin add mole@mole`。
 
 **常用指令**
 
@@ -62,6 +68,7 @@ mo analyze                   # 磁碟空間瀏覽（也可寫 mo analyse）
 mo status                    # 即時系統健康儀表板
 mo purge                     # 清理專案建置產物
 mo installer                 # 尋找並刪除安裝檔
+mo slim                      # 移除通用應用程式裡的 Intel 程式碼
 
 mo touchid                   # 設定終端機 Touch ID 指紋認證
 mo completion                # 設定命令列 Tab 鍵自動補全
@@ -80,6 +87,7 @@ mo uninstall --dry-run
 mo optimize --dry-run
 mo purge --dry-run
 mo installer --dry-run
+mo slim --dry-run
 mo history
 mo history --json
 
@@ -127,13 +135,21 @@ nix profile remove mole
 
 </details>
 
+**Windows 上安裝**（[Windows CLI](https://github.com/tw93/Mole/tree/windows)）
+
+```powershell
+iwr -useb https://raw.githubusercontent.com/tw93/Mole/windows/quick-install.ps1 | iex
+```
+
+Mole 只透過 Homebrew、這個倉庫和 [mole.fit](https://mole.fit/) 發布，`molemac.com`、`moleapp.net`、`molefit.com` 都不是 Mole，`mole.bluecatbot.com` 上的 Windows App 是同名的社群專案。
+
 ## 安全機制
 
 Mole 會刪除檔案，所以會先檢查路徑、保護共用和系統目錄，需要時才請你確認，無法確認安全的項目一律略過或拒絕。
 
-- `clean`、`uninstall`、`purge`、`installer` 與 `remove` 會刪除檔案，可先用 `--dry-run` 預覽，需要時加上 `--debug`
+- `clean`、`uninstall`、`purge`、`installer`、`slim` 與 `remove` 會刪除檔案，可先用 `--dry-run` 預覽，需要時加上 `--debug`
 - 日常執行 **無需 `sudo`**，僅在觸及系統級清理時按需請求管理員權限
-- `mo uninstall` 與 `mo analyze` 在確認後預設將刪除項目放入垃圾桶；`clean`、`purge` 與 `installer` 為永久刪除，`mo uninstall --permanent` 可跳過垃圾桶
+- `mo uninstall`、`mo analyze` 與 `mo slim` 在確認後預設將刪除項目放入垃圾桶；`clean`、`purge` 與 `installer` 為永久刪除，`mo uninstall --permanent` 可跳過垃圾桶
 - 清理操作記錄在 `~/Library/Logs/mole/operations.log` 中，可透過 `mo history` 查看，或設定 `MO_NO_OPLOG=1` 停用
 - 可透過 `mo clean --whitelist` 保護指定快取，或使用 `mo optimize --whitelist` 排除維護項目
 - 白名單檔案無法讀取時，`clean`、`purge` 和 `optimize` 會直接停止，不會在沒有白名單的情況下繼續執行
@@ -182,7 +198,7 @@ Free space: 223.5GB (+4.5GB)
 
 `mo uninstall` 移除已安裝的應用程式，以及 Mole 能確認屬於這個應用程式的相關檔案，若同一應用程式的另一個已安裝副本仍在使用這些檔案，會自動保留；應用程式此前已被手動刪除的話，執行 `mo clean` 掃描殘留。
 
-設定、外掛等個人資料預設保留，在解除安裝預覽頁按 `D` 可逐項選擇要刪除的資料路徑，解除安裝後若發現 shell、Hook 或 MCP 設定仍參照已刪除的路徑，只提示檔案與行號，不修改設定。
+設定、外掛等個人資料預設保留，在解除安裝預覽頁按 `D` 可逐項選擇要刪除的資料路徑，使用 `mo uninstall --with-data` 時這些資料會預先選取，瀏覽器設定檔與 App Group 容器除外，預覽中單獨列出，仍可按 `D` 保留任一路徑，解除安裝後若發現 shell、Hook 或 MCP 設定仍參照已刪除的路徑，只提示檔案與行號，不修改設定。
 
 ```text
 $ mo uninstall
@@ -304,6 +320,7 @@ Proxy   HTTP · 192.168.1.100             Chrome     ▮▮▮▯▯  28.3%
 - `mo status | jq '.health_score'`：當輸出被管線重定向時自動切換為 JSON 模式
 - `mo status --watch --interval 2s`：持續串流輸出 NDJSON（換行分隔的 JSON）
 - `mo history --json`：以 JSON 格式輸出歷史清理日誌。每個工作階段帶有 `run_id`（不透明字串，沒有記錄身分時為空）和 `attribution`，能識別的執行是 `run`，舊版按指令分組的是 `command`，舊標記分不清中斷和重疊執行時是 `ambiguous`。記錄下來的操作仍然都能看到，但 `ambiguous` 的計數沒辦法可靠地分到單次執行上。`ended_at` 為空表示沒有記錄到結束標記
+- `mo uninstall --list`：以 JSON 輸出已安裝的 App，欄位為 `name`、`bundle_id`、`source`、`uninstall_name`、`path` 與 `size`
 
 ```text
 $ mo analyze --json ~/Documents
@@ -417,6 +434,10 @@ Removed 5 installers, freed 3.83GB
 ```
 
 </details>
+
+### 應用程式瘦身（Slim）
+
+`mo slim` 在 Apple Silicon Mac 上移除通用應用程式裡的 Intel 程式碼。它會列出歸你所有、以 Developer ID 簽署的應用程式及各自的 Intel 程式碼大小，只處理你選取的應用程式。每個應用程式先在副本上瘦身，只動主程式與自帶簽名的巢狀程式碼，副本保留 Apple Silicon 程式碼並通過程式碼簽名與 Gatekeeper 檢查後才取代原應用程式，原應用程式會放入垃圾桶。App Store 應用程式、Apple 應用程式、設為使用 Rosetta 打開的應用程式、屬於其他使用者的應用程式以及正在執行的應用程式都不會處理。不需要安裝開發工具，應用程式更新後 Intel 程式碼會回來。
 
 ## 快捷啟動器
 

@@ -43,13 +43,19 @@ brew install mole
 curl -fsSL https://raw.githubusercontent.com/tw93/mole/main/install.sh | bash
 ```
 
-**Unter Windows** ([Windows-CLI](https://github.com/tw93/Mole/tree/windows))
+**Mit einem KI-Agenten**
 
-```powershell
-iwr -useb https://raw.githubusercontent.com/tw93/Mole/windows/quick-install.ps1 | iex
+Sag deinem Agenten:
+
+> Install Mole for me by reading https://raw.githubusercontent.com/tw93/Mole/main/llms.txt
+
+Oder installiere den Skill selbst. Damit zeigen dir Claude Code, Codex, Cursor und andere Agents jede Bereinigung zuerst mit `--dry-run`, bevor etwas entfernt wird, und überlassen App-Deinstallationen und Schritte mit Administratorrechten dir. Aktualisieren mit `npx skills update -g -y`.
+
+```bash
+npx skills add tw93/Mole -a claude-code codex cursor -g -y
 ```
 
-Mole wird nur über Homebrew, dieses GitHub-Repository und [mole.fit](https://mole.fit/) für die Mac- und Windows-App verteilt. Websites, die eine „auf Mole basierende“ App anbieten oder dich auffordern, einen kodierten Befehl ins Terminal einzufügen, haben nichts mit Mole zu tun.
+Als Host-Plugin: in Claude Code `/plugin marketplace add tw93/Mole`, dann `/plugin install mole@mole`, in Codex `codex plugin marketplace add tw93/Mole`, dann `codex plugin add mole@mole`.
 
 **Befehle**
 
@@ -62,6 +68,7 @@ mo analyze                   # Visuelle Festplattenanalyse (oder 'mo analyse')
 mo status                    # Live-Dashboard zur Systemgesundheit
 mo purge                     # Build-Artefakte von Projekten bereinigen
 mo installer                 # Installationsdateien finden und entfernen
+mo slim                      # Intel-Code aus Universal-Apps entfernen
 
 mo touchid                   # Touch ID für sudo konfigurieren
 mo completion                # Shell-Autovervollständigung einrichten
@@ -80,6 +87,7 @@ mo uninstall --dry-run
 mo optimize --dry-run
 mo purge --dry-run
 mo installer --dry-run
+mo slim --dry-run
 mo history
 mo history --json
 
@@ -127,13 +135,21 @@ Für eine deklarative Konfiguration füge `github:tw93/mole/main` als Flake-Inpu
 
 </details>
 
+**Unter Windows** ([Windows-CLI](https://github.com/tw93/Mole/tree/windows))
+
+```powershell
+iwr -useb https://raw.githubusercontent.com/tw93/Mole/windows/quick-install.ps1 | iex
+```
+
+Mole wird nur über Homebrew, dieses Repository und [mole.fit](https://mole.fit/) verteilt. `molemac.com`, `moleapp.net` und `molefit.com` sind nicht Mole, und die Windows-App auf `mole.bluecatbot.com` ist ein separates Community-Projekt.
+
 ## Sicherheit
 
 Mole kann Dateien löschen. Deshalb prüft es Pfade, schützt gemeinsam genutzte und systemeigene Orte und fragt nach einer Bestätigung, wenn eine Aktion sie braucht. Kann Mole nicht belegen, dass eine Änderung sicher ist, überspringt oder verweigert es sie.
 
-- `clean`, `uninstall`, `purge`, `installer` und `remove` löschen Dateien, überprüfe sie also zuerst mit `--dry-run` und bei Bedarf mit `--debug`
+- `clean`, `uninstall`, `purge`, `installer`, `slim` und `remove` löschen Dateien, überprüfe sie also zuerst mit `--dry-run` und bei Bedarf mit `--debug`
 - Führe Mole **ohne `sudo`** aus; Administratorrechte werden nur bei Bedarf für Systembereinigungen angefordert
-- `mo uninstall` und `mo analyze` verschieben Löschungen nach Bestätigung standardmäßig in den Papierkorb; `clean`, `purge` und `installer` löschen endgültig. `mo uninstall --permanent` überspringt den Papierkorb
+- `mo uninstall`, `mo analyze` und `mo slim` verschieben Löschungen nach Bestätigung standardmäßig in den Papierkorb; `clean`, `purge` und `installer` löschen endgültig. `mo uninstall --permanent` überspringt den Papierkorb
 - Bereinigungsaktivitäten werden in `~/Library/Logs/mole/operations.log` protokolliert; überprüfe sie mit `mo history` oder deaktiviere das Logging mit `MO_NO_OPLOG=1`
 - Schütze Caches mit `mo clean --whitelist` oder Wartungsaufgaben mit `mo optimize --whitelist`
 - Lässt sich die Whitelist-Datei nicht lesen, brechen `clean`, `purge` und `optimize` ab, statt ohne sie weiterzulaufen
@@ -182,7 +198,7 @@ Free space: 223.5GB (+4.5GB)
 
 `mo uninstall` entfernt eine installierte App zusammen mit den zugehörigen Dateien, die Mole eindeutig dieser App zuordnen kann. Gemeinsam genutzte Dateien bleiben erhalten, solange eine andere installierte Kopie derselben App sie noch nutzt. Falls eine App bereits gelöscht wurde, findet `mo clean` verbliebene Reste.
 
-Persönliche Daten wie Einstellungen und Plugins bleiben standardmäßig erhalten. Mit `D` in der Vorschau wählen Sie einzelne Datenpfade zum Entfernen aus. Nach der Deinstallation zeigt Mole Verweise auf entfernte Pfade in Shell-, Hook- oder MCP-Konfigurationen nur als Datei und Zeilennummer an; die Konfigurationen bleiben unverändert.
+Persönliche Daten wie Einstellungen und Plugins bleiben standardmäßig erhalten. Mit `D` in der Vorschau wählen Sie einzelne Datenpfade zum Entfernen aus. Mit `mo uninstall --with-data` sind diese Daten bereits ausgewählt, ausgenommen Browserprofile und App-Group-Container; die Vorschau listet sie separat, und mit `D` behalten Sie jeden beliebigen Pfad. Nach der Deinstallation zeigt Mole Verweise auf entfernte Pfade in Shell-, Hook- oder MCP-Konfigurationen nur als Datei und Zeilennummer an; die Konfigurationen bleiben unverändert.
 
 ```text
 $ mo uninstall
@@ -304,6 +320,7 @@ Der Zustandswert fasst CPU, RAM, Festplattenkapazität, SMART-Status, I/O, Tempe
 - `mo status | jq '.health_score'`: Schaltet bei Weiterleitung in Pipes automatisch auf JSON um
 - `mo status --watch --interval 2s`: Streamt NDJSON (durch Zeilenumbrüche getrenntes JSON)
 - `mo history --json`: Gibt die Bereinigungshistorie als JSON aus. Sitzungen enthalten `run_id` (ein undurchsichtiger String, leer, wenn keine Identität protokolliert wurde) und `attribution`: `run` für erkannte Läufe, `command` für die alte Gruppierung nach Befehl oder `ambiguous`, wenn alte Markierungen eine Unterbrechung nicht von überlappenden Läufen unterscheiden können. Aufgezeichnete Aktionen bleiben verfügbar; mehrdeutige Zählungen lassen sich einzelnen Läufen nicht zuverlässig zuordnen. Ein leeres `ended_at` bedeutet, dass keine Endmarkierung aufgezeichnet wurde.
+- `mo uninstall --list`: Gibt installierte Apps als JSON mit `name`, `bundle_id`, `source`, `uninstall_name`, `path` und `size` aus
 
 ```text
 $ mo analyze --json ~/Documents
@@ -417,6 +434,10 @@ Removed 5 installers, freed 3.83GB
 ```
 
 </details>
+
+### Apps verschlanken (Slim)
+
+`mo slim` entfernt auf Apple-Silicon-Macs den Intel-Code aus Universal-Apps. Es listet die Apps, die dir gehören und mit einer Developer ID signiert sind, samt der Größe ihres Intel-Codes, und ändert nur die Apps, die du auswählst. Jede App wird zuerst in einer Kopie verschlankt, wobei nur Hauptprogramme und verschachtelter Code mit eigener Signatur angefasst werden. Die Kopie ersetzt die App erst, wenn sie ihren Apple-Silicon-Code behält und die Codesignatur- und Gatekeeper-Prüfung besteht; das Original wandert in den Papierkorb. App-Store-Apps, Apple-Apps, Apps mit „Mit Rosetta öffnen“, Apps anderer Benutzer und laufende Apps bleiben unangetastet. Entwicklerwerkzeuge sind nicht nötig, und ein App-Update bringt den Intel-Code zurück.
 
 ## Schnellstarter
 

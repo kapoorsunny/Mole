@@ -43,13 +43,19 @@ brew install mole
 curl -fsSL https://raw.githubusercontent.com/tw93/mole/main/install.sh | bash
 ```
 
-**Windows에서 설치** ([Windows CLI](https://github.com/tw93/Mole/tree/windows))
+**AI 에이전트로 설치**
 
-```powershell
-iwr -useb https://raw.githubusercontent.com/tw93/Mole/windows/quick-install.ps1 | iex
+에이전트에게 이렇게 말하면 됩니다:
+
+> Install Mole for me by reading https://raw.githubusercontent.com/tw93/Mole/main/llms.txt
+
+스킬을 직접 설치할 수도 있습니다. 설치하면 Claude Code, Codex, Cursor 등 에이전트가 무엇이든 삭제하기 전에 `--dry-run`으로 목록을 먼저 보여 주고, 앱 제거와 관리자 권한이 필요한 단계는 직접 실행하도록 남겨 둡니다. 업데이트는 `npx skills update -g -y`로 합니다.
+
+```bash
+npx skills add tw93/Mole -a claude-code codex cursor -g -y
 ```
 
-Mole은 Homebrew, 이 GitHub 저장소, Mac 앱과 Windows 앱용 [mole.fit](https://mole.fit/)에서만 배포됩니다. "Mole 기반"이라고 소개하는 다른 앱이나 인코딩된 명령을 터미널에 붙여 넣으라고 하는 사이트는 Mole과 관련이 없습니다.
+호스트 플러그인으로 설치하려면 Claude Code에서 `/plugin marketplace add tw93/Mole` 다음 `/plugin install mole@mole`, Codex에서 `codex plugin marketplace add tw93/Mole` 다음 `codex plugin add mole@mole`을 실행합니다.
 
 **주요 명령어**
 
@@ -62,6 +68,7 @@ mo analyze                   # 디스크 분석: 인터랙티브 디스크 용�
 mo status                    # 상태 모니터링: CPU, 메모리, 네트워크 및 하드웨어 실시간 대시보드
 mo purge                     # 프로젝트 정리: 개발 빌드 결과물(node_modules, target 등) 정리
 mo installer                 # 설치 파일 정리: 설치 파일 탐색 및 삭제
+mo slim                      # 앱 슬림화: 유니버설 앱의 Intel용 코드 제거
 
 mo touchid                   # 터미널 sudo용 Touch ID 지문 인증 설정
 mo completion                # 셸 Tab 키 자동완성 구성
@@ -80,6 +87,7 @@ mo uninstall --dry-run
 mo optimize --dry-run
 mo purge --dry-run
 mo installer --dry-run
+mo slim --dry-run
 mo history
 mo history --json
 
@@ -127,13 +135,21 @@ nix profile remove mole
 
 </details>
 
+**Windows에서 설치** ([Windows CLI](https://github.com/tw93/Mole/tree/windows))
+
+```powershell
+iwr -useb https://raw.githubusercontent.com/tw93/Mole/windows/quick-install.ps1 | iex
+```
+
+Mole은 Homebrew, 이 저장소, [mole.fit](https://mole.fit/)에서만 배포됩니다. `molemac.com`, `moleapp.net`, `molefit.com`은 Mole이 아니며, `mole.bluecatbot.com`의 Windows 앱은 이름이 같은 별도의 커뮤니티 프로젝트입니다.
+
 ## 안전성 및 신뢰성
 
 Mole은 파일을 삭제할 수 있으므로 경로를 검증하고, 공유 위치와 시스템 소유 위치를 보호하며, 필요할 때 확인을 요청합니다. 안전하게 변경할 수 있다고 확인할 수 없는 항목은 건너뛰거나 거부합니다.
 
-- `clean`, `uninstall`, `purge`, `installer`, `remove` 명령은 파일을 삭제하므로 먼저 `--dry-run`으로 확인하고 필요 시 `--debug`를 함께 사용하세요
+- `clean`, `uninstall`, `purge`, `installer`, `slim`, `remove` 명령은 파일을 삭제하므로 먼저 `--dry-run`으로 확인하고 필요 시 `--debug`를 함께 사용하세요
 - 일상적인 Mole 실행에는 **`sudo`가 필요하지 않으며**, 시스템 수준의 정리 작업에만 관리자 권한을 요청합니다
-- `mo uninstall`과 `mo analyze`는 확인 후 삭제 항목을 기본적으로 휴지통으로 이동합니다. `clean`, `purge`, `installer`는 영구 삭제하며, `mo uninstall --permanent`는 휴지통을 거치지 않습니다
+- `mo uninstall`, `mo analyze`, `mo slim`은 확인 후 삭제 항목을 기본적으로 휴지통으로 이동합니다. `clean`, `purge`, `installer`는 영구 삭제하며, `mo uninstall --permanent`는 휴지통을 거치지 않습니다
 - 정리 내역은 `~/Library/Logs/mole/operations.log`에 기록되며, `mo history`로 확인하거나 `MO_NO_OPLOG=1`로 비활성화할 수 있습니다
 - `mo clean --whitelist`로 보존할 캐시를 지정하거나 `mo optimize --whitelist`로 제외할 유지보수 작업을 관리하세요
 - 화이트리스트 파일을 읽을 수 없으면 `clean`, `purge`, `optimize`는 이를 무시하고 실행하지 않고 중단합니다
@@ -182,7 +198,7 @@ Free space: 223.5GB (+4.5GB)
 
 `mo uninstall`은 설치된 앱과 함께 Mole이 해당 앱의 것으로 확인할 수 있는 관련 파일을 제거합니다. 같은 앱의 다른 설치본이 아직 사용하는 공유 파일은 보존됩니다. 이미 삭제된 앱의 경우 `mo clean`을 실행하여 남은 잔여물을 찾으세요.
 
-설정과 플러그인 등 개인 데이터는 기본적으로 보존됩니다. 삭제 미리보기에서 `D`를 누르면 삭제할 데이터 경로를 개별적으로 선택할 수 있습니다. 삭제 후 shell, Hook, MCP 설정에 삭제된 경로의 참조가 있으면 파일과 줄 번호만 표시하며, 설정은 수정하지 않습니다.
+설정과 플러그인 등 개인 데이터는 기본적으로 보존됩니다. 삭제 미리보기에서 `D`를 누르면 삭제할 데이터 경로를 개별적으로 선택할 수 있습니다. `mo uninstall --with-data`를 사용하면 브라우저 프로필과 App Group 컨테이너를 제외한 이 데이터가 미리 선택되고 미리보기에서 따로 표시되며, `D`로 원하는 경로를 계속 보존할 수 있습니다. 삭제 후 shell, Hook, MCP 설정에 삭제된 경로의 참조가 있으면 파일과 줄 번호만 표시하며, 설정은 수정하지 않습니다.
 
 ```text
 $ mo uninstall
@@ -304,6 +320,7 @@ Proxy   HTTP · 192.168.1.100             Chrome     ▮▮▮▯▯  28.3%
 - `mo status | jq '.health_score'`: 출력이 파이프로 연결되면 자동으로 JSON 모드로 전환됩니다
 - `mo status --watch --interval 2s`: NDJSON(줄바꿈 구분 JSON) 형식으로 실시간 스트리밍합니다
 - `mo history --json`: 정리 작업 이력을 JSON으로 출력합니다. 각 세션에는 `run_id`(불투명한 문자열이며 식별 정보가 기록되지 않았으면 빈 값)와 `attribution`이 들어 있으며, 식별된 실행은 `run`, 예전 명령 단위 묶음은 `command`, 예전 마커로 중단과 겹친 실행을 구분할 수 없으면 `ambiguous`입니다. 기록된 작업은 계속 확인할 수 있지만 `ambiguous` 개수는 개별 실행에 정확히 나눌 수 없습니다. `ended_at`이 비어 있으면 종료 마커가 기록되지 않은 것입니다.
+- `mo uninstall --list`: 설치된 앱을 `name`, `bundle_id`, `source`, `uninstall_name`, `path`, `size` 필드가 있는 JSON으로 출력합니다
 
 ```text
 $ mo analyze --json ~/Documents
@@ -417,6 +434,10 @@ Removed 5 installers, freed 3.83GB
 ```
 
 </details>
+
+### 앱 슬림화 (Slim)
+
+`mo slim`은 Apple Silicon Mac에서 유니버설 앱에 포함된 Intel용 코드를 제거합니다. 본인 소유이면서 Developer ID로 서명된 앱과 각 앱의 Intel용 코드 용량을 보여 주고, 선택한 앱만 처리합니다. 각 앱은 먼저 복사본에서 정리되며, 메인 실행 파일과 자체 서명을 가진 중첩 코드만 대상으로 합니다. 복사본이 Apple Silicon용 코드를 유지하고 코드 서명과 Gatekeeper 검사를 통과해야만 원래 앱을 대체하며, 원래 앱은 휴지통으로 이동합니다. App Store 앱, Apple 앱, Rosetta를 사용하여 열도록 설정된 앱, 다른 사용자가 소유한 앱, 실행 중인 앱은 처리하지 않습니다. 개발 도구는 필요 없으며, 앱을 업데이트하면 Intel용 코드가 다시 생깁니다.
 
 ## 퀵 런처
 

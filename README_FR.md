@@ -43,13 +43,19 @@ brew install mole
 curl -fsSL https://raw.githubusercontent.com/tw93/mole/main/install.sh | bash
 ```
 
-**Sous Windows** ([CLI Windows](https://github.com/tw93/Mole/tree/windows))
+**Avec un agent IA**
 
-```powershell
-iwr -useb https://raw.githubusercontent.com/tw93/Mole/windows/quick-install.ps1 | iex
+Dites à votre agent :
+
+> Install Mole for me by reading https://raw.githubusercontent.com/tw93/Mole/main/llms.txt
+
+Ou installez le skill vous-même. Avec lui, Claude Code, Codex, Cursor et les autres agents vous montrent chaque nettoyage avec `--dry-run` avant de supprimer quoi que ce soit, et vous laissent les désinstallations d'apps et les étapes administrateur. Mise à jour avec `npx skills update -g -y`.
+
+```bash
+npx skills add tw93/Mole -a claude-code codex cursor -g -y
 ```
 
-Mole est distribué uniquement via Homebrew, ce dépôt GitHub et [mole.fit](https://mole.fit/) pour les apps Mac et Windows. Les sites qui proposent une app « basée sur Mole » ou vous demandent de coller une commande encodée dans le Terminal n'ont aucun lien avec Mole.
+En plugin de l'hôte : dans Claude Code `/plugin marketplace add tw93/Mole` puis `/plugin install mole@mole`, dans Codex `codex plugin marketplace add tw93/Mole` puis `codex plugin add mole@mole`.
 
 **Commandes principales**
 
@@ -62,6 +68,7 @@ mo analyze                   # Explorateur visuel de disque (ou 'mo analyse')
 mo status                    # Tableau de bord de santé système en direct
 mo purge                     # Nettoyer les fichiers de build de projets
 mo installer                 # Trouver et supprimer les fichiers d'installation
+mo slim                      # Retirer le code Intel des apps universelles
 
 mo touchid                   # Configurer Touch ID pour sudo dans le terminal
 mo completion                # Activer l'autocomplétion du shell
@@ -80,6 +87,7 @@ mo uninstall --dry-run
 mo optimize --dry-run
 mo purge --dry-run
 mo installer --dry-run
+mo slim --dry-run
 mo history
 mo history --json
 
@@ -127,13 +135,21 @@ Pour une installation déclarative, ajoutez `github:tw93/mole/main` comme entré
 
 </details>
 
+**Sous Windows** ([CLI Windows](https://github.com/tw93/Mole/tree/windows))
+
+```powershell
+iwr -useb https://raw.githubusercontent.com/tw93/Mole/windows/quick-install.ps1 | iex
+```
+
+Mole est distribué uniquement via Homebrew, ce dépôt et [mole.fit](https://mole.fit/). `molemac.com`, `moleapp.net` et `molefit.com` ne sont pas Mole, et l'app Windows de `mole.bluecatbot.com` est un projet communautaire distinct.
+
 ## Sécurité et fiabilité
 
 Mole peut supprimer des fichiers ; il valide donc les chemins, protège les emplacements partagés et ceux du système, et demande une confirmation quand une action l'exige. Quand Mole ne peut pas prouver qu'un élément peut être modifié sans risque, il l'ignore ou refuse l'opération.
 
-- `clean`, `uninstall`, `purge`, `installer` et `remove` suppriment des fichiers : prévisualisez toujours leurs actions avec `--dry-run`, complété au besoin de `--debug`
+- `clean`, `uninstall`, `purge`, `installer`, `slim` et `remove` suppriment des fichiers : prévisualisez toujours leurs actions avec `--dry-run`, complété au besoin de `--debug`
 - Exécutez Mole **sans `sudo`** : les privilèges administrateur ne sont demandés que pour les actions touchant au système
-- `mo uninstall` et `mo analyze` placent leurs suppressions dans la Corbeille par défaut après confirmation ; `clean`, `purge` et `installer` suppriment définitivement. `mo uninstall --permanent` évite la Corbeille
+- `mo uninstall`, `mo analyze` et `mo slim` placent leurs suppressions dans la Corbeille par défaut après confirmation ; `clean`, `purge` et `installer` suppriment définitivement. `mo uninstall --permanent` évite la Corbeille
 - Les opérations de nettoyage sont consignées dans `~/Library/Logs/mole/operations.log` ; consultez-les avec `mo history` ou désactivez la journalisation avec `MO_NO_OPLOG=1`
 - Préservez des caches avec `mo clean --whitelist` ou excluez des opérations avec `mo optimize --whitelist`
 - Si le fichier de liste blanche est illisible, `clean`, `purge` et `optimize` s'arrêtent au lieu de s'exécuter sans lui
@@ -182,7 +198,7 @@ Free space: 223.5GB (+4.5GB)
 
 `mo uninstall` supprime une application installée ainsi que les fichiers associés que Mole peut rattacher à cette application. Si une autre copie installée de la même application utilise encore des fichiers partagés, Mole les conserve. Si l'application a déjà été supprimée manuellement, lancez `mo clean` pour trouver les résidus orphelins.
 
-Les données personnelles, notamment les réglages et les extensions, sont conservées par défaut. Appuyez sur `D` dans l’aperçu pour sélectionner les chemins de données à supprimer. Après la désinstallation, les références aux chemins supprimés dans les configurations shell, Hook ou MCP sont indiquées uniquement par fichier et numéro de ligne, sans modifier ces configurations.
+Les données personnelles, notamment les réglages et les extensions, sont conservées par défaut. Appuyez sur `D` dans l’aperçu pour sélectionner les chemins de données à supprimer. Avec `mo uninstall --with-data`, ces données sont présélectionnées, sauf les profils de navigateur et les conteneurs App Group ; l’aperçu les liste à part et `D` permet toujours de conserver n’importe quel chemin. Après la désinstallation, les références aux chemins supprimés dans les configurations shell, Hook ou MCP sont indiquées uniquement par fichier et numéro de ligne, sans modifier ces configurations.
 
 ```text
 $ mo uninstall
@@ -304,6 +320,7 @@ Le score de santé combine le CPU, la mémoire, l'espace disque, l'état SMART, 
 - `mo status | jq '.health_score'` : passe automatiquement en mode JSON lorsqu'il est utilisé dans un pipeline
 - `mo status --watch --interval 2s` : transmet un flux NDJSON (JSON délimité par des retours à la ligne)
 - `mo history --json` : affiche l'historique des nettoyages au format JSON. Les sessions incluent `run_id` (une chaîne opaque, vide si aucune identité n'a été enregistrée) et `attribution` : `run` pour les exécutions identifiées, `command` pour l'ancien regroupement par commande, ou `ambiguous` quand les anciens marqueurs ne permettent pas de distinguer une interruption d'exécutions qui se chevauchent. Les actions enregistrées restent disponibles ; les décomptes ambigus ne peuvent pas être attribués de façon fiable à une exécution précise. Un `ended_at` vide signifie qu'aucun marqueur de fin n'a été enregistré.
+- `mo uninstall --list` : renvoie les apps installées au format JSON avec `name`, `bundle_id`, `source`, `uninstall_name`, `path` et `size`
 
 ```text
 $ mo analyze --json ~/Documents
@@ -417,6 +434,10 @@ Removed 5 installers, freed 3.83GB
 ```
 
 </details>
+
+### Alléger les apps (Slim)
+
+`mo slim` retire le code Intel des apps universelles sur les Mac Apple Silicon. Il liste les apps qui vous appartiennent et sont signées avec un Developer ID, avec la taille de leur code Intel, et ne modifie que celles que vous sélectionnez. Chaque app est d'abord allégée sur une copie, en ne touchant qu'aux exécutables principaux et au code imbriqué doté de sa propre signature ; la copie ne remplace l'app que si elle conserve son code Apple Silicon et passe les vérifications de signature de code et de Gatekeeper, et l'original est placé dans la Corbeille. Les apps de l'App Store, les apps Apple, les apps réglées sur « Ouvrir avec Rosetta », celles d'un autre utilisateur et les apps en cours d'exécution ne sont pas modifiées. Aucun outil de développement n'est nécessaire, et une mise à jour de l'app réintroduit le code Intel.
 
 ## Lanceurs rapides
 

@@ -365,17 +365,15 @@ _incomplete_download_delete_guard_allows() {
 # view says the exact file is idle. The guarded cleanup repeats the probe after
 # sizing, and safe_remove repeats it again at the real deletion boundary.
 _clean_incomplete_downloads() {
-    local -a patterns=(
-        "$HOME/Downloads/*.download"
-        "$HOME/Downloads/*.crdownload"
-        "$HOME/Downloads/*.part"
-    )
-    local labels=("Safari incomplete downloads" "Chrome incomplete downloads" "Partial incomplete downloads")
+    [[ -d "$HOME/Downloads" ]] || return 0
+
+    local -a extensions=("download" "crdownload" "part")
+    local -a labels=("Safari incomplete downloads" "Chrome incomplete downloads" "Partial incomplete downloads")
     local i=0
-    for pattern in "${patterns[@]}"; do
+    for ext in "${extensions[@]}"; do
         local label="${labels[$i]}"
         i=$((i + 1))
-        for f in $pattern; do
+        for f in "$HOME/Downloads/"*."$ext"; do
             [[ -e "$f" ]] || continue
             local open_state=0
             _mole_paths_have_open_handle "$f" || open_state=$?
@@ -1685,23 +1683,30 @@ validate_external_volume_target() {
         return 1
     fi
 
-    local disk_info=""
-    disk_info=$(run_with_timeout "$MOLE_TIMEOUT_QUICK_DETECT_SEC" command diskutil info "$resolved" 2> /dev/null || echo "")
-    if [[ -n "$disk_info" ]]; then
-        if echo "$disk_info" | grep -Eq 'Internal:[[:space:]]+Yes'; then
-            echo "Refusing to clean an internal volume: $resolved" >&2
-            return 1
-        fi
-
-        local protocol=""
-        protocol=$(echo "$disk_info" | awk -F: '/Protocol:/ {gsub(/^[[:space:]]+/, "", $2); print $2; exit}')
-        case "$protocol" in
-            SMB | NFS | AFP | CIFS | WebDAV)
-                echo "Refusing to clean network volume protocol $protocol: $resolved" >&2
-                return 1
-                ;;
-        esac
+    local disk_info="" disk_info_rc=0 internal="" protocol=""
+    disk_info=$(run_with_timeout "$MOLE_TIMEOUT_QUICK_DETECT_SEC" command diskutil info -plist "$resolved" 2> /dev/null) || disk_info_rc=$?
+    mole_rc_signal "$disk_info_rc" && return "$disk_info_rc"
+    # Partial output, missing fields and string values are not external-disk
+    # evidence. Require the successful typed plist rather than localized text.
+    if [[ $disk_info_rc -ne 0 ]] ||
+        ! internal=$(printf '%s' "$disk_info" | /usr/bin/plutil -extract Internal raw -expect bool -o - - 2> /dev/null) ||
+        ! protocol=$(printf '%s' "$disk_info" | /usr/bin/plutil -extract BusProtocol raw -expect string -o - - 2> /dev/null) ||
+        [[ -z "$protocol" ]]; then
+        echo "Refusing to clean a volume diskutil could not describe: $resolved" >&2
+        echo "Check that it is still mounted with diskutil info -plist \"$resolved\", then retry" >&2
+        return 1
     fi
+    if [[ "$internal" != "false" ]]; then
+        echo "Refusing to clean an internal volume: $resolved" >&2
+        return 1
+    fi
+
+    case "$protocol" in
+        SMB | NFS | AFP | CIFS | WebDAV)
+            echo "Refusing to clean network volume protocol $protocol: $resolved" >&2
+            return 1
+            ;;
+    esac
 
     printf '%s\n' "$resolved"
 }
@@ -1788,8 +1793,7 @@ clean_external_volume_target() {
     # mutation. A timed-out find can leave a valid-looking prefix on stdout;
     # consuming that prefix from process substitution used to delete those rows
     # and report success even though the scan itself returned 124.
-    local metadata_scan_timeout="${MOLE_EXTERNAL_VOLUME_SCAN_TIMEOUT:-15}"
-    [[ "$metadata_scan_timeout" =~ ^[0-9]+$ ]] || metadata_scan_timeout=15
+    local metadata_scan_timeout=15
     local metadata_scan_file=""
     local metadata_scan_errors=""
     if ! metadata_scan_file=$(mktemp_file "external-volume-metadata") ||
@@ -1862,10 +1866,11 @@ clean_external_volume_target() {
 
         local size_kb=""
         local size_rc=0
-        size_kb=$(get_path_size_kb "$target_path" 2> /dev/null) || size_rc=$?
-        [[ $size_rc -eq 0 ]] || _mole_record_clean_cancellation "$size_rc"
-        [[ $size_rc -eq 0 ]] || return "$size_rc"
-        [[ "$size_kb" =~ ^[0-9]+$ ]] || size_kb=0
+        # Readable bytes, like every other cleanup total: one unlistable
+        # subfolder must not cancel the rest of the volume's cleanup.
+        size_kb=$(get_path_size_kb "$target_path" "" readable 2> /dev/null) || size_rc=$?
+        mole_item_size_continues "$size_rc" || return $?
+        [[ $size_rc -eq 0 && "$size_kb" =~ ^[0-9]+$ ]] || size_kb=0
 
         if [[ "$DRY_RUN" == "true" ]]; then
             if ! _mole_path_matches_identity \
@@ -2484,10 +2489,7 @@ clean_application_support_logs() {
     local total_size_partial=false
     local cleaned_count=0
     local found_any=false
-    local size_timeout_seconds="${MOLE_APP_SUPPORT_ITEM_SIZE_TIMEOUT_SEC:-0.4}"
-    if [[ ! "$size_timeout_seconds" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
-        size_timeout_seconds=0.4
-    fi
+    local size_timeout_seconds=0.4
     # Enable nullglob for safe globbing.
     local _ng_state
     _ng_state=$(shopt -p nullglob || true)
@@ -3081,6 +3083,8 @@ _large_prefetch_queue_rows() {
         "$HOME/Library/Application Support/MobileSync/Backup" \
         "$HOME/Library/Mail" \
         "$HOME/Library/Mail Downloads" \
+        "$HOME/Conductor/workspaces" \
+        "$HOME/Conductor/archived-contexts" \
         "$HOME/Library/Updates" \
         "$HOME/Library/Developer/Xcode/Archives" \
         "$HOME/Library/Containers/com.docker.docker/Data" \
@@ -3142,7 +3146,7 @@ _large_prefetch_run() {
             fi
             # A row the pool cannot give its usual budget is better measured
             # inline later, where it gets that budget again.
-            if [[ ${timeout_seconds%%.*} -lt ${MOLE_LARGE_CANDIDATE_SIZE_TIMEOUT:-3} ]]; then
+            if [[ ${timeout_seconds%%.*} -lt 3 ]]; then
                 next=$total
                 break
             fi
@@ -3280,7 +3284,7 @@ _check_large_file_candidates_body() {
 
     _large_candidate_size_kb() {
         local path="$1"
-        local timeout_seconds="${2:-${MOLE_LARGE_CANDIDATE_SIZE_TIMEOUT:-3}}"
+        local timeout_seconds="${2:-3}"
         local exact="${3:-}"
         [[ "$timeout_seconds" =~ ^[0-9]+$ ]] || timeout_seconds=3
         local du_output="" du_rc=0
@@ -3391,6 +3395,12 @@ _check_large_file_candidates_body() {
 
     _report_large_or_stop "Mail data" "$HOME/Library/Mail" || return $?
     _report_large_or_stop "Mail downloads" "$HOME/Library/Mail Downloads" || return $?
+
+    # Conductor workspaces and archived chats are authored state, not caches.
+    # Report occupied space only; age or a missing worktree registration does
+    # not establish that local changes, commits, or context are disposable.
+    _report_large_or_stop "Conductor workspaces" "$HOME/Conductor/workspaces" || return $?
+    _report_large_or_stop "Conductor archived contexts" "$HOME/Conductor/archived-contexts" || return $?
 
     local installer_path
     for installer_path in /Applications/Install\ macOS*.app; do

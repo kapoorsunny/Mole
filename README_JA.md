@@ -43,13 +43,19 @@ brew install mole
 curl -fsSL https://raw.githubusercontent.com/tw93/mole/main/install.sh | bash
 ```
 
-**Windowsでインストール**（[Windows版CLI](https://github.com/tw93/Mole/tree/windows)）
+**AI エージェントでインストール**
 
-```powershell
-iwr -useb https://raw.githubusercontent.com/tw93/Mole/windows/quick-install.ps1 | iex
+エージェントにこう伝えるだけです：
+
+> Install Mole for me by reading https://raw.githubusercontent.com/tw93/Mole/main/llms.txt
+
+スキルを自分で入れることもできます。入れると Claude Code、Codex、Cursor などのエージェントは削除の前に必ず `--dry-run` で一覧を見せ、アプリのアンインストールと管理者権限が必要な手順はあなたに任せます。更新は `npx skills update -g -y` です。
+
+```bash
+npx skills add tw93/Mole -a claude-code codex cursor -g -y
 ```
 
-Moleの配布元はHomebrew、このGitHubリポジトリ、Mac版とWindows版の[mole.fit](https://mole.fit/)だけです。「Moleベース」をうたう別のアプリや、エンコードされたコマンドをターミナルに貼り付けるよう求めるサイトはMoleとは無関係です。
+ホストのプラグインとして入れる場合は、Claude Code で `/plugin marketplace add tw93/Mole` のあと `/plugin install mole@mole`、Codex で `codex plugin marketplace add tw93/Mole` のあと `codex plugin add mole@mole` を実行します。
 
 **主要コマンド**
 
@@ -62,6 +68,7 @@ mo analyze                   # ディスク分析：ディスク容量の内訳�
 mo status                    # 状態監視：CPU、メモリ、ネットワーク、ハードウェアの健康度ダッシュボード
 mo purge                     # プロジェクトクリーン：ビルド生成物（node_modules、targetなど）の整理
 mo installer                 # インストーラ整理：インストーラファイルの探索と削除
+mo slim                      # アプリのスリム化：ユニバーサルアプリの Intel 用コードを削除
 
 mo touchid                   # ターミナルsudo用Touch ID認証の設定
 mo completion                # シェル補完の設定
@@ -80,6 +87,7 @@ mo uninstall --dry-run
 mo optimize --dry-run
 mo purge --dry-run
 mo installer --dry-run
+mo slim --dry-run
 mo history
 mo history --json
 
@@ -127,13 +135,21 @@ nix profile remove mole
 
 </details>
 
+**Windowsでインストール**（[Windows版CLI](https://github.com/tw93/Mole/tree/windows)）
+
+```powershell
+iwr -useb https://raw.githubusercontent.com/tw93/Mole/windows/quick-install.ps1 | iex
+```
+
+Moleの配布元はHomebrew、このリポジトリ、[mole.fit](https://mole.fit/)だけです。`molemac.com`、`moleapp.net`、`molefit.com` はMoleではなく、`mole.bluecatbot.com` のWindowsアプリは同じ名前の別のコミュニティプロジェクトです。
+
 ## 安全性
 
 Moleはファイルを削除できるため、パスを検証し、共有の場所やシステム所有の場所を保護し、必要な操作では確認を求めます。安全に変更できると確認できない項目は、スキップするか処理を拒否します。
 
-- `clean`、`uninstall`、`purge`、`installer`、`remove` はファイル削除を伴うため、事前に `--dry-run` で確認し、必要に応じて `--debug` を併用してください
+- `clean`、`uninstall`、`purge`、`installer`、`slim`、`remove` はファイル削除を伴うため、事前に `--dry-run` で確認し、必要に応じて `--debug` を併用してください
 - 通常利用では **`sudo` 不要** で、システム領域のクリーン時のみ必要に応じて管理者権限を要求します
-- `mo uninstall` と `mo analyze` は、確認後に削除項目を既定でゴミ箱へ移動します。`clean`、`purge`、`installer` は完全に削除し、`mo uninstall --permanent` はゴミ箱を経由しません
+- `mo uninstall`、`mo analyze`、`mo slim` は、確認後に削除項目を既定でゴミ箱へ移動します。`clean`、`purge`、`installer` は完全に削除し、`mo uninstall --permanent` はゴミ箱を経由しません
 - クリーンアップ履歴は `~/Library/Logs/mole/operations.log` に記録され、`mo history` で確認するか、`MO_NO_OPLOG=1` で無効化できます
 - `mo clean --whitelist` で保持したいキャッシュを保護し、`mo optimize --whitelist` で除外項目を設定できます
 - ホワイトリストファイルを読み取れない場合、`clean`、`purge`、`optimize` はそれなしで実行せずに停止します
@@ -182,7 +198,7 @@ Free space: 223.5GB (+4.5GB)
 
 `mo uninstall` はインストール済みアプリと、Moleがそのアプリのものだと特定できる関連ファイルを削除します。同じアプリの別のインストールがまだ使っている共有ファイルは保持されます。アプリがすでに削除済みの場合は、`mo clean` で残留ファイルを探せます。
 
-設定やプラグインなどの個人データは標準で保持されます。削除プレビューで `D` を押すと、削除するデータのパスを個別に選べます。削除後、shell・Hook・MCP 設定に削除済みパスへの参照が見つかった場合は、ファイル名と行番号だけを表示し、設定は変更しません。
+設定やプラグインなどの個人データは標準で保持されます。削除プレビューで `D` を押すと、削除するデータのパスを個別に選べます。`mo uninstall --with-data` を使うと、ブラウザのプロファイルと App Group コンテナを除くこれらのデータが最初から選択され、プレビューでは別枠で表示されます。`D` で任意のパスを残すこともできます。削除後、shell・Hook・MCP 設定に削除済みパスへの参照が見つかった場合は、ファイル名と行番号だけを表示し、設定は変更しません。
 
 ```text
 $ mo uninstall
@@ -304,6 +320,7 @@ Proxy   HTTP · 192.168.1.100             Chrome     ▮▮▮▯▯  28.3%
 - `mo status | jq '.health_score'`：パイプ接続時に自動でJSONモードへ切り替え
 - `mo status --watch --interval 2s`：NDJSON形式でリアルタイムストリーミング
 - `mo history --json`：クリーンアップ履歴をJSONで出力。各セッションには `run_id`（不透明な文字列で、識別情報が記録されていない場合は空）と `attribution` が含まれ、識別できた実行は `run`、旧来のコマンド単位のグループ化は `command`、旧形式のマーカーでは中断と実行の重なりを区別できない場合は `ambiguous` になります。記録されたアクションは引き続き参照できますが、`ambiguous` の件数を個々の実行に正しく割り当てることはできません。`ended_at` が空の場合は終了マーカーが記録されていません。
+- `mo uninstall --list`：インストール済みアプリを `name`、`bundle_id`、`source`、`uninstall_name`、`path`、`size` を含むJSONで出力
 
 ```text
 $ mo analyze --json ~/Documents
@@ -417,6 +434,10 @@ Removed 5 installers, freed 3.83GB
 ```
 
 </details>
+
+### アプリのスリム化（Slim）
+
+`mo slim` は Apple Silicon Mac で、ユニバーサルアプリに含まれる Intel 用コードを削除します。自分が所有し Developer ID で署名されたアプリと、それぞれの Intel 用コードのサイズを一覧表示し、選択したアプリだけを処理します。各アプリはまずコピー上でスリム化され、対象はメイン実行ファイルと独自の署名を持つ入れ子のコードに限られます。コピーが Apple Silicon 用コードを保ち、コード署名と Gatekeeper の検証に通った場合にのみ元のアプリと置き換え、元のアプリはゴミ箱へ移動します。App Store のアプリ、Apple のアプリ、Rosetta を使用して開く設定のアプリ、他のユーザーが所有するアプリ、実行中のアプリは処理しません。開発ツールは不要で、アプリをアップデートすると Intel 用コードは元に戻ります。
 
 ## クイックランチャー
 

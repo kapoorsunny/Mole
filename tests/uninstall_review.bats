@@ -52,7 +52,7 @@ SH
     run env HOME="$HOME/config-references" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'SH'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/uninstall/batch.sh"
-mkdir -p "$HOME/.cursor" "$HOME/.config/paseo"
+mkdir -p "$HOME/.cursor" "$HOME/.config/paseo" "$HOME/.config/fish"
 app="$HOME/Applications/Example.app"
 removed="$HOME/.config/removed-tool"
 # shellcheck disable=SC2016  # Literal forms stored by third-party installers.
@@ -63,6 +63,7 @@ printf '%s\n' 'alias example=Example' 'TOKEN=private-value' \
     'hook="${HOME}/.config/removed-tool/run"' \
     'hook="~/.config/removed-tool/run"' > "$HOME/.zshrc"
 printf '{"command":"%s/Contents/MacOS/example"}\n' "$app" > "$HOME/.cursor/mcp.json"
+printf '%s\n' "set -gx EXAMPLE_BIN \"$app/Contents/MacOS/example\"" > "$HOME/.config/fish/config.fish"
 cp "$HOME/.zshrc" "$HOME/config-before"
 uninstall_configuration_references "$app" "$removed" "$HOME/.config/paseo"
 cmp "$HOME/.zshrc" "$HOME/config-before" || exit 1
@@ -70,6 +71,7 @@ SH
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
     [[ "$output" == *"~/.zshrc:3"* && "$output" == *"~/.zshrc:5"* && "$output" == *"~/.zshrc:6"* && "$output" == *"~/.zshrc:7"* ]] || return 1
     [[ "$output" == *"~/.cursor/mcp.json:1"* ]] || return 1
+    [[ "$output" == *"~/.config/fish/config.fish:1"* ]] || return 1
     [[ "$output" != *"private-value"* && "$output" != *"~/.zshrc:4"* && "$output" != *"~/.zshrc:1"* ]] || return 1
 }
 
@@ -265,7 +267,10 @@ selected_apps=("0|$app|Example|com.example.app|0|Never")
 running_apps=() sudo_apps=() brew_cask_apps=() blocked_apps=() manual_removal_apps=() app_details=() leftover_notes=()
 total_estimated_size=0
 _batch_scan_app_details
-MOLE_DRY_RUN=1 MOLE_TEST_MODE=1 _batch_preview_and_confirm <<< ''
+MOLE_DRY_RUN=1 MOLE_TEST_MODE=1 _batch_preview_and_confirm <<< '' > "$HOME/default.out"
+grep -Fq 'Personal data kept:' "$HOME/default.out" || exit 1
+if grep -Fq 'Personal data to remove:' "$HOME/default.out"; then exit 1; fi
+if grep -Fq 'including personal data' "$HOME/default.out"; then exit 1; fi
 [[ $(grep -Fxc "$app" "$HOME/measured") -eq 1 ]] || exit 1
 if grep -Fxq "$data" "$HOME/measured"; then exit 1; fi
 grep -Fxq "$cache" "$HOME/measured" || exit 1
@@ -284,11 +289,129 @@ SH
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
 }
 
+@test "selected personal data has its own preview heading and names itself in the prompt" {
+    run env HOME="$HOME/heading" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'SH'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/ui/menu_paginated.sh"
+source "$PROJECT_ROOT/lib/uninstall/batch.sh"
+cache="$HOME/Library/Caches/com.example.app"
+data="$HOME/Library/Application Support/Example"
+app="$HOME/Applications/Example.app"
+mkdir -p "$cache" "$data" "$app"
+encoded=$(printf '%s\n' "$cache" "$data" | base64 | tr -d '\n')
+app_details=("Example|$app|com.example.app|12|$encoded||true|false|false|||||none||||")
+running_apps=() sudo_apps=() brew_cask_apps=() leftover_notes=()
+total_estimated_size=12
+get_path_size_kb() { printf '10\n'; }
+calculate_total_size() { if [[ -n "$1" ]]; then printf '1\n'; else printf '0\n'; fi; }
+drain_pending_input() { :; }
+paginated_multi_select() { MOLE_SELECTION_RESULT=0; }
+MOLE_DRY_RUN=1 MOLE_TEST_MODE=1 _batch_preview_and_confirm <<< $'d\n'
+SH
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    local confirmed="${output##*Files to be removed:}"
+    local apps_part="${confirmed%%Personal data to remove:*}"
+    local data_part="${confirmed#*Personal data to remove:}"
+    # The cache stays beside the app; the chosen data moves under its heading.
+    [[ "$confirmed" == *"Personal data to remove:"* ]] || { echo "$output"; return 1; }
+    [[ "$apps_part" == *"Caches/com.example.app"* ]] || { echo "$output"; return 1; }
+    [[ "$apps_part" != *"Application Support/Example"* ]] || { echo "$output"; return 1; }
+    [[ "$data_part" == *"Application Support/Example"* ]] || { echo "$output"; return 1; }
+    [[ "$confirmed" != *"Personal data kept:"* ]] || { echo "$output"; return 1; }
+    [[ "$confirmed" == *"Remove 1 app, "*", including personal data"* ]] || { echo "$output"; return 1; }
+}
+
+@test "--with-data preselects every app's personal data but holds back browser profiles and App Groups" {
+    run env HOME="$HOME/with-data-review" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'SH'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/ui/menu_paginated.sh"
+source "$PROJECT_ROOT/lib/uninstall/batch.sh"
+one_data="$HOME/Library/Application Support/One"
+one_group="$HOME/Library/Group Containers/group.com.example.one"
+two_data="$HOME/Library/Preferences/com.example.two.plist"
+# Upper case on purpose: APFS folds case, so the holdback must too.
+two_profile="$HOME/Library/Application Support/GOOGLE/Chrome"
+one_app="$HOME/Applications/One.app"
+two_app="$HOME/Applications/Two.app"
+mkdir -p "$one_data" "$one_group" "$two_profile" "$one_app" "$two_app" "$HOME/Library/Preferences"
+touch "$two_data"
+one=$(printf '%s\n' "$one_data" "$one_group" | base64 | tr -d '\n')
+two=$(printf '%s\n' "$two_data" "$two_profile" | base64 | tr -d '\n')
+app_details=(
+    "One|$one_app|com.example.one|12|$one||true|false|false|||||none||||"
+    "Two|$two_app|com.example.two|12|$two||true|false|false|||||none||||"
+)
+running_apps=() sudo_apps=() brew_cask_apps=() leftover_notes=()
+total_estimated_size=24
+get_path_size_kb() { printf '10\n'; }
+calculate_total_size() { if [[ -n "$1" ]]; then printf '1\n'; else printf '0\n'; fi; }
+drain_pending_input() { :; }
+paginated_multi_select() { return 9; }
+MOLE_UNINSTALL_WITH_DATA=1 MOLE_DRY_RUN=1 MOLE_TEST_MODE=1 _batch_preview_and_confirm <<< ''
+IFS='|' read -r _ _ _ _ result _ <<< "${app_details[0]}"
+files=$(decode_file_list "$result" One)
+[[ "$files" == *"$one_data"* ]] || exit 1
+[[ "$files" != *"$one_group"* ]] || exit 1
+IFS='|' read -r _ _ _ _ result _ <<< "${app_details[1]}"
+files=$(decode_file_list "$result" Two)
+[[ "$files" == *"$two_data"* ]] || exit 1
+[[ "$files" != *"$two_profile"* ]] || exit 1
+[[ -d "$one_data" && -f "$two_data" && -d "$two_profile" ]] || exit 1
+SH
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    local kept="${output##*Personal data kept:}"
+    [[ "$kept" == *"group.com.example.one"* && "$kept" == *"GOOGLE/Chrome"* ]] || { echo "$output"; return 1; }
+    [[ "$kept" != *"Application Support/One"* && "$kept" != *"com.example.two.plist"* ]] || { echo "$output"; return 1; }
+    [[ "$output" == *", including personal data"* ]] || { echo "$output"; return 1; }
+}
+
+@test "--with-data holds back CrossOver, Whisky and OpenEmu game libraries" {
+    run env HOME="$HOME/with-data-games" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'SH'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/ui/menu_paginated.sh"
+source "$PROJECT_ROOT/lib/uninstall/batch.sh"
+bottles="$HOME/Library/Application Support/CrossOver"
+whisky="$HOME/Library/Containers/com.isaacmarovitz.Whisky"
+roms="$HOME/Library/Application Support/OpenEmu"
+prefs="$HOME/Library/Preferences/com.codeweavers.CrossOver.plist"
+app="$HOME/Applications/CrossOver.app"
+mkdir -p "$bottles/Bottles/Steam" "$whisky/Bottles" "$roms/Game Library" "$app" "$HOME/Library/Preferences"
+touch "$prefs"
+encoded=$(printf '%s\n' "$bottles" "$whisky" "$roms" "$prefs" | base64 | tr -d '\n')
+app_details=("CrossOver|$app|com.codeweavers.CrossOver|12|$encoded||true|false|false|||||none||||")
+running_apps=() sudo_apps=() brew_cask_apps=() leftover_notes=()
+total_estimated_size=12
+get_path_size_kb() { printf '10\n'; }
+calculate_total_size() { if [[ -n "$1" ]]; then printf '1\n'; else printf '0\n'; fi; }
+drain_pending_input() { :; }
+paginated_multi_select() { return 9; }
+MOLE_UNINSTALL_WITH_DATA=1 MOLE_DRY_RUN=1 MOLE_TEST_MODE=1 _batch_preview_and_confirm <<< ''
+IFS='|' read -r _ _ _ _ result _ <<< "${app_details[0]}"
+files=$(decode_file_list "$result" CrossOver)
+[[ "$files" == *"$prefs"* ]] || exit 1
+[[ "$files" != *"$bottles"* ]] || exit 1
+[[ "$files" != *"$whisky"* ]] || exit 1
+[[ "$files" != *"$roms"* ]] || exit 1
+SH
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    local kept="${output##*Personal data kept:}"
+    [[ "$kept" == *"CrossOver"* && "$kept" == *"Whisky"* && "$kept" == *"OpenEmu"* ]] || { echo "$output"; return 1; }
+}
+
 run_non_tty_confirmation() {
-    local input_mode="$1"
-    local out="$HOME/no-tty-$input_mode.out"
-    if ! env -u MOLE_TEST_NO_AUTH -u MOLE_TEST_MODE HOME="$HOME/no-tty-$input_mode" \
-        PROJECT_ROOT="$PROJECT_ROOT" INPUT_MODE="$input_mode" MOLE_DRY_RUN=1 \
+    local input_mode="$1" dry_run="${2:-0}" expected_rc=3 expected_text='interactive terminal'
+    if [[ "$dry_run" == 1 ]]; then
+        expected_rc=4
+        expected_text='Dry run complete'
+    fi
+    local out="$HOME/no-tty-$input_mode-$dry_run.out"
+    # No sudo or Homebrew apps are selected, so the real-mode confirmation
+    # path cannot reach a password prompt even when the gate is broken.
+    if ! env -u MOLE_TEST_NO_AUTH -u MOLE_TEST_MODE HOME="$HOME/no-tty-$input_mode-$dry_run" \
+        PROJECT_ROOT="$PROJECT_ROOT" INPUT_MODE="$input_mode" MOLE_DRY_RUN="$dry_run" EXPECTED_RC="$expected_rc" \
         /bin/bash --noprofile --norc > "$out" 2>&1 <<'SH'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
@@ -309,14 +432,14 @@ else
     printf 'n\n' | _batch_preview_and_confirm || rc=$?
 fi
 printf 'RC=%s\n' "$rc"
-[[ $rc -eq 3 ]] || exit 1
+[[ $rc -eq $EXPECTED_RC ]] || exit 1
 [[ -d "$app" ]] || exit 1
 SH
     then
         cat "$out"
         return 1
     fi
-    grep -Fq 'interactive terminal' "$out" || { cat "$out"; return 1; }
+    grep -Fq "$expected_text" "$out" || { cat "$out"; return 1; }
 }
 
 @test "real uninstall preview refuses /dev/null without a terminal" {
@@ -325,4 +448,9 @@ SH
 
 @test "real uninstall preview refuses a piped n without a terminal" {
     run_non_tty_confirmation piped
+}
+
+@test "dry-run uninstall preview without a terminal ends cleanly after the plan" {
+    run_non_tty_confirmation null 1
+    run_non_tty_confirmation piped 1
 }

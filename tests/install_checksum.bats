@@ -480,6 +480,56 @@ EOF
 	[[ "$output" == *"SUCCESS:Installed status from V1.2.2"* ]]
 }
 
+@test "download_binary falls back to git release tag when API tag lookup fails" {
+	run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+mole_source_installer
+
+INSTALL_DIR="$HOME/install"
+CONFIG_DIR="$HOME/config"
+SOURCE_DIR="$HOME/source"
+VERBOSE=1
+GREEN='' BLUE='' YELLOW='' RED='' NC=''
+ICON_SUCCESS='ok'
+ICON_ERROR='err'
+
+start_line_spinner() { :; }
+stop_line_spinner() { :; }
+log_success() { echo "SUCCESS:$*"; }
+log_warning() { echo "WARNING:$*"; }
+log_error() { echo "ERROR:$*"; }
+get_latest_release_tag() { return 1; }
+get_latest_release_tag_from_git() { echo "V1.2.2"; }
+verify_release_attestation() { return 2; }
+
+content="fallback-binary"
+asset="status-darwin-$(uname -m | sed 's/x86_64/amd64/')"
+hash=$(printf '%s' "$content" | shasum -a 256 | awk '{print $1}')
+curl() {
+	local out="" url=""
+	while [[ $# -gt 0 ]]; do
+		case "$1" in
+			-o) out="$2"; shift 2 ;;
+			http*) url="$1"; shift ;;
+			*) shift ;;
+		esac
+	done
+	case "$url" in
+		*"V1.2.3/${asset}") return 22 ;;
+		*"V1.2.2/${asset}") printf '%s' "$content" > "$out" ;;
+		*"V1.2.2/SHA256SUMS") printf '%s  %s\n' "$hash" "$asset" > "$out" ;;
+		*) return 1 ;;
+	esac
+}
+
+download_binary "status"
+grep -q "fallback-binary" "$CONFIG_DIR/bin/status-go"
+EOF
+
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"SUCCESS:Installed status from V1.2.2"* ]]
+}
+
 @test "download_binary aborts on fallback-tag checksum mismatch without a source build" {
 	run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
 set -euo pipefail
@@ -1481,6 +1531,40 @@ EOF
 
 	[ "$status" -eq 0 ] || return 1
 	[ "$output" = "V1.60.0" ]
+}
+
+@test "installer never runs the system git stub without the Command Line Tools" {
+	local fake_bin="$HOME/fake-bin-git-stub"
+	mkdir -p "$fake_bin"
+	cat > "$fake_bin/git" <<'SCRIPT'
+#!/bin/bash
+echo ran >> "$HOME/git-ran"
+printf '%s\trefs/tags/V1.61.0\n' deadbeef
+SCRIPT
+	cat > "$fake_bin/xcode-select" <<'SCRIPT'
+#!/bin/bash
+exit "${XCODE_RC:-2}"
+SCRIPT
+	chmod +x "$fake_bin/git" "$fake_bin/xcode-select"
+
+	for xcode_rc in 2 0; do
+		rm -f "$HOME/git-ran"
+		run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" PATH="$fake_bin:$PATH" XCODE_RC="$xcode_rc" FAKE_BIN="$fake_bin" /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+mole_source_installer
+INSTALLER_SYSTEM_GIT_STUB="$FAKE_BIN/git"
+INSTALLER_XCODE_SELECT_BIN="$FAKE_BIN/xcode-select"
+printf 'tag=%s\n' "$(get_latest_release_tag_from_git || true)"
+EOF
+		[ "$status" -eq 0 ] || return 1
+		if [[ "$xcode_rc" == 2 ]]; then
+			[[ "$output" == "tag=" ]] || return 1
+			[[ ! -e "$HOME/git-ran" ]] || return 1
+		else
+			[[ "$output" == "tag=V1.61.0" ]] || return 1
+			[[ -e "$HOME/git-ran" ]] || return 1
+		fi
+	done
 }
 
 @test "get_latest_release_tag rejects non-macOS release tags" {

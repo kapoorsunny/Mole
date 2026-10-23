@@ -730,6 +730,98 @@ EOF
     }
 }
 
+# --with-data (#1746) only changes the starting selection of the data review.
+run_with_data_batch() {
+    local mode="$1"
+    local fixture_home
+    fixture_home=$(mktemp -d "$HOME/with-data-fixture.XXXXXX")
+    mkdir -p "$fixture_home/Applications/Demo.app" \
+        "$fixture_home/Library/Caches/com.example.demo" \
+        "$fixture_home/Library/Application Support/Demo" \
+        "$fixture_home/Library/Group Containers/group.com.example.demo"
+    touch "$fixture_home/Library/Application Support/Demo/notes.db"
+
+    run env HOME="$fixture_home" PROJECT_ROOT="$PROJECT_ROOT" WITH_DATA_MODE="$mode" \
+        /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/uninstall/batch.sh"
+source "$PROJECT_ROOT/tests/helpers/uninstall.bash"
+mole_test_isolate_uninstall_inventory
+brew() { :; }
+export MOLE_DELETE_MODE=trash
+export MOLE_TEST_TRASH_DIR="$HOME/test-trash" MOLE_TEST_NO_AUTH=1
+request_sudo_access() { return 0; }
+start_inline_spinner() { :; }
+stop_inline_spinner() { :; }
+enter_alt_screen() { :; }
+leave_alt_screen() { :; }
+hide_cursor() { :; }
+show_cursor() { :; }
+remove_apps_from_dock() { :; }
+drain_pending_input() { :; }
+pgrep() { return 1; }
+pkill() { return 0; }
+sudo() { return 0; }
+# The data list opens with the flag's selection; this user clears it.
+paginated_multi_select() {
+    [[ -n "${MOLE_PRESELECTED_INDICES:-}" ]] || return 9
+    MOLE_SELECTION_RESULT=""
+    return 0
+}
+
+selected_apps=("0|$HOME/Applications/Demo.app|Demo|com.example.demo|0|Never")
+files_cleaned=0
+total_items=0
+total_size_cleaned=0
+MOLE_UNINSTALL_WITH_DATA=1
+if [[ "$WITH_DATA_MODE" == enter ]]; then input=$'\n'; else input=$'d\n'; fi
+printf '%s' "$input" | MOLE_TEST_MODE=1 batch_uninstall_applications
+
+data="$HOME/Library/Application Support/Demo"
+[[ ! -d "$HOME/Applications/Demo.app" ]] || { echo "app kept"; exit 1; }
+[[ ! -d "$HOME/Library/Caches/com.example.demo" ]] || { echo "cache kept"; exit 1; }
+[[ -d "$HOME/Library/Group Containers/group.com.example.demo" ]] || { echo "group container removed"; exit 1; }
+if [[ "$WITH_DATA_MODE" == enter ]]; then
+    [[ ! -e "$data" ]] || { echo "preselected data kept"; exit 1; }
+else
+    [[ -f "$data/notes.db" ]] || { echo "deselected data removed"; exit 1; }
+fi
+EOF
+}
+
+@test "uninstall --with-data preselects personal data and Enter removes it" {
+    run_with_data_batch enter
+    [ "$status" -eq 0 ] || {
+        printf 'exit status: %s\n%s\n' "$status" "$output"
+        return 1
+    }
+    [[ "$output" == *"Personal data to remove:"* ]] || { printf '%s\n' "$output"; return 1; }
+    [[ "$output" == *", including personal data"* ]] || { printf '%s\n' "$output"; return 1; }
+    # The App Group container is never preselected; it stays in the kept list.
+    [[ "$output" == *"Personal data kept:"*"Group Containers/group.com.example.demo"* ]] || {
+        printf '%s\n' "$output"
+        return 1
+    }
+}
+
+@test "uninstall --with-data keeps data the user deselects in the D list" {
+    run_with_data_batch deselect
+    [ "$status" -eq 0 ] || {
+        printf 'exit status: %s\n%s\n' "$status" "$output"
+        return 1
+    }
+    # The first preview offered the data; the confirmed one no longer does.
+    local confirmed="${output##*Files to be removed:}"
+    [[ "$output" == *"Personal data to remove:"* ]] || { printf '%s\n' "$output"; return 1; }
+    [[ "$confirmed" != *"Personal data to remove:"* ]] || { printf '%s\n' "$output"; return 1; }
+    [[ "$confirmed" != *"including personal data"* ]] || { printf '%s\n' "$output"; return 1; }
+    [[ "$confirmed" == *"Personal data kept:"*"Application Support/Demo"* ]] || {
+        printf '%s\n' "$output"
+        return 1
+    }
+}
+
 @test "batch uninstall routes a root-owned app through unprivileged Trash when its parent is writable (#1331)" {
     local fixture_home
     fixture_home=$(mktemp -d "$HOME/inventory-fixture.XXXXXX")
@@ -5438,6 +5530,60 @@ INNER
     [[ "$output" == *"delete_mode=permanent"* ]]
 }
 
+run_uninstall_main_with_data_probe() {
+    local apps_cache
+    apps_cache="$(mktemp "${BATS_TEST_TMPDIR:-$BATS_RUN_TMPDIR:-$HOME}/tmp-with-data.XXXXXX")"
+
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" MOLE_TEST_NO_AUTH=1 \
+        APPS_CACHE_FILE="$apps_cache" MOLE_UNINSTALL_WITH_DATA=1 \
+        /bin/bash --noprofile --norc -s -- "$@" << 'INNER'
+set -euo pipefail
+source "$PROJECT_ROOT/bin/uninstall.sh"
+
+log_operation_session_start() { :; }
+show_uninstall_help() { :; }
+hide_cursor() { :; }
+show_cursor() { :; }
+clear_screen() { :; }
+start_uninstall_interactive_screen() { :; }
+stop_uninstall_interactive_screen() { :; }
+scan_applications() { printf '%s\n' "$APPS_CACHE_FILE"; }
+load_applications() { return 0; }
+drain_pending_input() { :; }
+select_apps_for_uninstall() {
+    printf 'with_data=%s delete_mode=%s\n' "${MOLE_UNINSTALL_WITH_DATA:-unset}" "${MOLE_DELETE_MODE:-unset}"
+    _MOLE_MENU_USER_QUIT=1
+    return 1
+}
+
+main "$@"
+INNER
+
+    rm -f "$apps_cache"
+}
+
+@test "uninstall main sets MOLE_UNINSTALL_WITH_DATA only with --with-data" {
+    run_uninstall_main_with_data_probe --with-data
+    [ "$status" -eq 0 ] || return 1
+    [[ "$output" == *"with_data=1 delete_mode=trash"* ]] || return 1
+
+    # An inherited environment value never preselects data on its own.
+    run_uninstall_main_with_data_probe
+    [ "$status" -eq 0 ] || return 1
+    [[ "$output" == *"with_data=0 delete_mode=trash"* ]] || return 1
+
+    run_uninstall_main_with_data_probe --with-data --permanent
+    [ "$status" -eq 0 ] || return 1
+    [[ "$output" == *"with_data=1 delete_mode=permanent"* ]] || return 1
+}
+
+@test "uninstall main still rejects unknown flags next to --with-data" {
+    run_uninstall_main_with_data_probe --with-datas
+    [ "$status" -eq 1 ] || return 1
+    [[ "$output" == *"Unknown uninstall option: --with-datas"* ]] || return 1
+    [[ "$output" != *"with_data="* ]]
+}
+
 # ---------------------------------------------------------------------------
 # --list: read-only inventory of installable app names (PR #755 scope)
 # ---------------------------------------------------------------------------
@@ -5891,6 +6037,7 @@ uninstall_live_bundle_has_other_install() {
 }
 pgrep() { return 1; }
 get_brew_cask_name() { return 2; }
+brew() { return 0; }
 get_file_owner() { whoami; }
 get_path_size_kb() { echo "UNEXPECTED_SIZE"; }
 find_app_files() { echo "UNEXPECTED_DISCOVERY"; return 99; }
@@ -5922,6 +6069,58 @@ INNER
     [[ "$output" != *"UNEXPECTED_SIZE"* ]] || return 1
     [[ "$output" != *"UNEXPECTED_DISCOVERY"* ]] || return 1
     [[ "$output" != *"UNEXPECTED_TEARDOWN"* ]] || return 1
+    [[ "$output" != *"UNEXPECTED_DELETE"* ]]
+}
+
+@test "batch uninstall names the Homebrew error when brew itself cannot run" {
+    run env HOME="$HOME/batch-brew-failure" PROJECT_ROOT="$PROJECT_ROOT" \
+        /bin/bash --noprofile --norc <<'INNER'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/uninstall/batch.sh"
+
+app_path="$HOME/Applications/TimedOut.app"
+mkdir -p "$app_path"
+start_inline_spinner() { :; }
+stop_inline_spinner() { :; }
+_batch_refresh_selected_app_bundle_id() { printf 'com.example.TimedOut\n'; }
+official_uninstaller_vendor() { return 1; }
+uninstall_bundle_id_has_surviving_sibling() { return 1; }
+uninstall_live_bundle_has_other_install() {
+    _MOLE_UNINSTALL_LIVE_SIBLING_FINGERPRINT=""
+    _MOLE_UNINSTALL_LIVE_SIBLING_PATHS=()
+    return 1
+}
+pgrep() { return 1; }
+get_brew_cask_name() { return 2; }
+brew() {
+    printf 'Error: You have not agreed to the Xcode license agreements.\n' >&2
+    return 1
+}
+get_file_owner() { whoami; }
+get_path_size_kb() { echo "UNEXPECTED_SIZE"; }
+find_app_files() { echo "UNEXPECTED_DISCOVERY"; return 99; }
+stop_launch_services() { echo "UNEXPECTED_TEARDOWN"; }
+unregister_app_bundle() { echo "UNEXPECTED_TEARDOWN"; }
+remove_login_item() { echo "UNEXPECTED_TEARDOWN"; }
+force_kill_app() { echo "UNEXPECTED_TEARDOWN"; }
+mole_delete() { echo "UNEXPECTED_DELETE"; }
+
+selected_apps=("0|$app_path|TimedOut|com.example.TimedOut|0|Never")
+files_cleaned=0
+total_items=0
+total_size_cleaned=0
+rc=0
+MOLE_TEST_MODE=1 batch_uninstall_applications || rc=$?
+printf 'RC=%s\n' "$rc"
+[[ $rc -eq 1 ]]
+INNER
+
+    [ "$status" -eq 0 ] || return 1
+    [[ "$output" == *"RC=1"* ]] || return 1
+    [[ "$output" == *"nothing was removed"* ]] || return 1
+    [[ "$output" == *"Homebrew itself failed: You have not agreed to the Xcode license agreements."* ]] || return 1
+    [[ "$output" != *"matches a Homebrew cask brew cannot read"* ]] || return 1
     [[ "$output" != *"UNEXPECTED_DELETE"* ]]
 }
 
@@ -7075,4 +7274,27 @@ _remove_completion_integration
 EOF
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
     cmp "$HOME/expected-user-lines" "$HOME/.zshrc" || return 1
+}
+
+@test "remove_mole without a terminal exits nonzero and removes nothing" {
+    local iso="$BATS_TEST_TMPDIR/no-tty-remove"
+    mkdir -p "$iso/.local/bin" "$iso/.config/mole" "$iso/.cache/mole"
+    cp "$PROJECT_ROOT/mole" "$iso/.local/bin/mole"
+    cp "$PROJECT_ROOT/mo" "$iso/.local/bin/mo"
+
+    run env -u MOLE_TEST_MODE HOME="$iso" PROJECT_ROOT="$PROJECT_ROOT" \
+        /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/manage/remove.sh"
+drain_pending_input() { :; }
+remove_mole false < /dev/null
+EOF
+
+    [ "$status" -ne 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"interactive terminal"* ]] || { echo "$output"; return 1; }
+    [ -f "$iso/.local/bin/mole" ] || return 1
+    [ -f "$iso/.local/bin/mo" ] || return 1
+    [ -d "$iso/.config/mole" ] || return 1
+    [ -d "$iso/.cache/mole" ] || return 1
 }
