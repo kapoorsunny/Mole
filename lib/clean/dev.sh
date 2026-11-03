@@ -2,6 +2,29 @@
 # Developer Tools Cleanup Module
 set -euo pipefail
 
+# Owner commands follow configured roots, so lexical policy alone cannot
+# protect a cache reached through a directory alias. Resolve the existing
+# prefix even when the owner has not created the final cache directory yet.
+owner_cache_root_is_safe() {
+    local cache_root="${1%/}"
+    validate_path_for_deletion "$cache_root" > /dev/null 2>&1 || return $?
+    is_path_whitelisted "$cache_root" && return 1
+
+    local existing="$cache_root" suffix="" physical_root=""
+    while [[ ! -e "$existing" ]]; do
+        [[ ! -L "$existing" && "$existing" != / && -n "$existing" ]] || return 1
+        suffix="/${existing##*/}$suffix"
+        existing="${existing%/*}"
+        [[ -n "$existing" ]] || existing=/
+    done
+    [[ -d "$existing" ]] || return 1
+    physical_root=$(cd -P "$existing" 2> /dev/null && pwd -P) || return $?
+    physical_root="${physical_root%/}$suffix"
+    validate_path_for_deletion "$physical_root" > /dev/null 2>&1 || return $?
+    is_path_whitelisted "$physical_root" && return 1
+    return 0
+}
+
 # Tool cache helper (respects DRY_RUN and whitelist).
 # Args:
 #   $1 = description (display name)
@@ -9,6 +32,22 @@ set -euo pipefail
 #   $3+ = command to run
 # Returns the signal status when the owner command was interrupted, or the
 # pending clean cancellation without running anything; callers propagate it.
+# Size of an owner cache root for the before/after row total. Prints nothing
+# and fails for a root outside HOME, a link, a missing folder or a sizing
+# timeout, so the row falls back to no size instead of a guessed one.
+_owner_cache_size_kb() {
+    local root="$1"
+    [[ -n "$root" && "$root" == "$HOME"/* && -d "$root" && ! -L "$root" ]] || return 1
+    declare -f get_cleanup_path_size_kb > /dev/null 2>&1 || return 1
+    local size_kb="" size_rc=0
+    size_kb=$(get_cleanup_path_size_kb "$root" 2> /dev/null) || size_rc=$?
+    # An interrupt while measuring is handed back so no owner command starts.
+    mole_rc_signal "$size_rc" && return "$size_rc"
+    [[ $size_rc -eq 0 ]] || return 1
+    [[ "$size_kb" =~ ^[0-9]+$ ]] || return 1
+    echo "$size_kb"
+}
+
 clean_tool_cache() {
     local description="$1"
     local cache_path="$2"
@@ -31,22 +70,68 @@ clean_tool_cache() {
         return 0
     fi
 
+    if [[ -n "$cache_path" && "${1:-}" != ":" ]]; then
+        local root_rc=0
+        owner_cache_root_is_safe "$cache_path" || root_rc=$?
+        mole_rc_signal "$root_rc" && return "$root_rc"
+        if [[ $root_rc -ne 0 ]]; then
+            debug_log "$description kept: cache root is protected or unresolved"
+            log_operation "${MOLE_CURRENT_COMMAND:-clean}" "SKIPPED" "$cache_path" "protected or unresolved cache root"
+            return 0
+        fi
+    fi
+
     if [[ "$DRY_RUN" != "true" ]]; then
         local command_rc=0
         if [[ -t 1 ]]; then
             start_section_spinner "Cleaning $description..."
         fi
+        # The owner command reports nothing Mole can parse, so the row measures
+        # its root before and after and counts only what disappeared. Roots
+        # outside HOME (the Nix store) are too large to walk twice.
+        local size_before_kb="" size_rc=0
+        if [[ "${1:-}" != ":" ]]; then
+            size_before_kb=$(_owner_cache_size_kb "$cache_path") || size_rc=$?
+        fi
+        if mole_rc_signal "$size_rc"; then
+            [[ -t 1 ]] && stop_section_spinner
+            _mole_record_clean_cancellation "$size_rc" "$description"
+            return "$size_rc"
+        fi
+        [[ $size_rc -eq 0 ]] || size_before_kb=""
         "$@" > /dev/null 2>&1 || command_rc=$?
+        local freed_kb=0 after_rc=0
+        if [[ $command_rc -eq 0 && -n "$size_before_kb" ]]; then
+            local size_after_kb=0
+            if [[ -e "$cache_path" ]]; then
+                size_after_kb=$(_owner_cache_size_kb "$cache_path") || after_rc=$?
+                [[ $after_rc -eq 0 ]] || size_after_kb=""
+            fi
+            if [[ -n "$size_after_kb" ]] && ((size_before_kb > size_after_kb)); then
+                freed_kb=$((size_before_kb - size_after_kb))
+            fi
+        fi
         if [[ -t 1 ]]; then
             stop_section_spinner
         fi
         if [[ $command_rc -eq 0 ]]; then
-            echo -e "  ${GREEN}${ICON_SUCCESS}${NC} $description"
+            if ((freed_kb > 0)); then
+                echo -e "  ${GREEN}${ICON_SUCCESS}${NC} $description · $(colorize_human_size "$(bytes_to_human_kb "$freed_kb")")"
+                mole_add_cleaned_row 0 "$freed_kb"
+            else
+                echo -e "  ${GREEN}${ICON_SUCCESS}${NC} $description"
+            fi
             note_activity
             # The owner command changed the Mac, so it gets an operations.log
             # row like every other sink. A ":" placeholder changed nothing.
             if [[ "${1:-}" != ":" ]]; then
                 log_operation "${MOLE_CURRENT_COMMAND:-clean}" "REMOVED" "${cache_path:-$description}" "owner command: $description"
+            fi
+            # Ctrl-C while measuring the result reaches only the measuring
+            # child; the command already ran, so record it, then stop.
+            if mole_rc_signal "$after_rc"; then
+                _mole_record_clean_cancellation "$after_rc" "$description"
+                return "$after_rc"
             fi
         elif ! mole_rc_signal "$command_rc"; then
             # Routine owner failures stay in diagnostics, without a success
@@ -95,6 +180,27 @@ clean_corepack_cache() {
     fi
 }
 
+uv_process_state() {
+    mole_pgrep_any -x uv -x uvx
+}
+
+bun_process_state() {
+    # bunx is a link to bun, and a process keeps the name it was started by.
+    mole_pgrep_any -x bun -x bunx
+}
+
+# Direct cleanup of a cache whose owner command is unavailable. A running or
+# unknown owner keeps it; a guard stop is routine and does not end the step.
+_dev_safe_clean_owner_absent_cache() {
+    local probe="$1"
+    local family="$2"
+    shift 2
+    local rc=0
+    _dev_safe_clean_process_guarded "$probe" "$family" "${*: -1}" "$@" || rc=$?
+    [[ $rc -gt 1 ]] || return 0
+    return "$rc"
+}
+
 clean_uv_cache() {
     local uv_cache_path="$HOME/.cache/uv"
     if command -v uv > /dev/null 2>&1 && run_with_timeout "$MOLE_TIMEOUT_QUICK_DETECT_SEC" uv --version > /dev/null 2>&1; then
@@ -105,9 +211,13 @@ clean_uv_cache() {
         # to check the default path and mutate a different one.
         [[ $cache_rc -eq 0 && "$detected_cache" == /* && "$detected_cache" != *$'\n'* ]] || return 0
         uv_cache_path="$detected_cache"
-        clean_tool_cache "uv cache" "$uv_cache_path" run_with_timeout "$MOLE_TIMEOUT_PKG_CLEANUP_SEC" uv cache prune || return $?
+        # A long-running uvx holds the cache lock, and prune would wait for it
+        # until the owner timeout.
+        UV_LOCK_TIMEOUT="$MOLE_TIMEOUT_SHORT_QUERY_SEC" clean_tool_cache "uv cache" "$uv_cache_path" run_with_timeout "$MOLE_TIMEOUT_PKG_CLEANUP_SEC" uv cache prune || return $?
     else
-        safe_clean "$uv_cache_path"/* "uv cache"
+        # An unresolvable uv is not proof the cache is orphaned: a uv outside
+        # Mole's PATH may still hold it, so only a confirmed idle owner clears it.
+        _dev_safe_clean_owner_absent_cache uv_process_state "uv" "$uv_cache_path"/* "uv cache"
     fi
 }
 
@@ -319,6 +429,12 @@ clean_conda_metadata_caches() {
             conda_pkg_roots+=("$root")
         done
         conda_cache_whitelisted "${conda_pkg_roots[@]}" && return 0
+        for root in "${conda_pkg_roots[@]}"; do
+            local root_rc=0
+            owner_cache_root_is_safe "$root" || root_rc=$?
+            mole_rc_signal "$root_rc" && return "$root_rc"
+            [[ $root_rc -eq 0 ]] || return 0
+        done
         clean_tool_cache "conda index/tarball/log caches" "${conda_pkg_roots[0]}" \
             run_with_timeout "$MOLE_TIMEOUT_DISK_VERIFY_SEC" conda clean --yes --index-cache --tarballs --logfiles || return $?
         return 0
@@ -494,6 +610,56 @@ clean_pnpm_stores() {
 }
 
 # npm/pnpm/yarn/bun caches.
+# Rebind the owner check at the command boundary, after root validation.
+_bun_pm_cache_rm() {
+    local _MOLE_CLEAN_GUARD_REASON=""
+    mole_clean_process_guard bun_process_state "bun started" || return 1
+    "$@"
+}
+
+clean_bun_cache() {
+    local bun_default_cache="$HOME/.bun/install/cache"
+    if ! command -v bun > /dev/null 2>&1 || ! run_with_timeout "$MOLE_TIMEOUT_QUICK_DETECT_SEC" bun --version > /dev/null 2>&1; then
+        _dev_safe_clean_owner_absent_cache bun_process_state "bun" "$bun_default_cache"/* "Bun cache"
+        return $?
+    fi
+
+    local bun_cache_path="" cache_rc=0
+    if [[ -t 1 ]]; then start_section_spinner "Checking bun cache path..."; fi
+    bun_cache_path=$(run_with_timeout "$MOLE_TIMEOUT_QUICK_DETECT_SEC" bun pm cache 2> /dev/null) || cache_rc=$?
+    if [[ -t 1 ]]; then stop_section_spinner; fi
+    mole_rc_signal "$cache_rc" && return "$cache_rc"
+    # `bun pm cache rm` clears bun's configured root. A failed lookup is not
+    # permission to check the default path and let bun clear a different one.
+    [[ $cache_rc -eq 0 && "$bun_cache_path" == /* && "$bun_cache_path" != *$'\n'* ]] || return 0
+    bun_cache_path="${bun_cache_path%/}"
+    # "/" strips to empty, and clean_tool_cache skips root policy for an empty path.
+    [[ -n "$bun_cache_path" ]] || return 0
+
+    local _MOLE_CLEAN_GUARD_REASON=""
+    if ! is_path_whitelisted "$bun_cache_path" &&
+        ! mole_clean_process_guard bun_process_state "bun started"; then
+        mole_report_guard_stop "bun cache" mole_defer_cleanup_family "bun"
+    else
+        clean_tool_cache "bun cache" "$bun_cache_path" \
+            _bun_pm_cache_rm run_with_timeout "$MOLE_TIMEOUT_PKG_LIST_SEC" bun pm cache rm || return $?
+    fi
+
+    local bun_cache_physical="$bun_cache_path" bun_default_physical="$bun_default_cache"
+    if [[ -d "$bun_cache_physical" ]]; then
+        bun_cache_physical=$(cd "$bun_cache_physical" 2> /dev/null && pwd -P) || bun_cache_physical="$bun_cache_path"
+    fi
+    if [[ -d "$bun_default_physical" ]]; then
+        bun_default_physical=$(cd "$bun_default_physical" 2> /dev/null && pwd -P) || bun_default_physical="$bun_default_cache"
+    fi
+    if [[ "$bun_cache_physical" != "$bun_default_physical" ]]; then
+        # Another bun environment may still use the default root.
+        _dev_safe_clean_owner_absent_cache bun_process_state "bun" "$bun_default_cache"/* "Orphaned bun cache"
+        return $?
+    fi
+    return 0
+}
+
 clean_dev_npm() {
     local npm_default_cache="$HOME/.npm"
     local npm_cache_path="$npm_default_cache"
@@ -514,9 +680,9 @@ clean_dev_npm() {
         fi
     fi
 
-    # These residual directories are not removed by `npm cache clean --force`
-    local -a npm_residual_dirs=("_cacache" "_npx" "_logs" "_prebuilds")
-    local -a npm_descriptions=("npm cache directory" "npm npx cache" "npm logs" "npm prebuilds")
+    # Keep _npx: running commands can still read its installed packages.
+    local -a npm_residual_dirs=("_cacache" "_logs" "_prebuilds")
+    local -a npm_descriptions=("npm cache directory" "npm logs" "npm prebuilds")
 
     # Clean default npm cache path
     local i
@@ -542,83 +708,18 @@ clean_dev_npm() {
     fi
 
     clean_pnpm_stores || return $?
+    # dlx is hard-safety whitelisted, which takes the whole pnpm root out of
+    # the generic ~/Library/Caches sweep; name the rebuildable metadata here.
+    safe_clean "$HOME/Library/Caches/pnpm"/metadata*/* "pnpm metadata cache"
     clean_corepack_cache || return $?
-    local bun_default_cache="$HOME/.bun/install/cache"
-    local bun_cache_path="$bun_default_cache"
-    local bun_cache_cleaned=false
-    local bun_dry_run="${DRY_RUN:-false}"
-    if command -v bun > /dev/null 2>&1 && run_with_timeout "$MOLE_TIMEOUT_QUICK_DETECT_SEC" bun --version > /dev/null 2>&1; then
-        if [[ -t 1 ]]; then start_section_spinner "Checking bun cache path..."; fi
-        bun_cache_path=$(run_with_timeout "$MOLE_TIMEOUT_QUICK_DETECT_SEC" bun pm cache 2> /dev/null) || bun_cache_path=""
-        if [[ -t 1 ]]; then stop_section_spinner; fi
-
-        if [[ -z "$bun_cache_path" || "$bun_cache_path" != /* ]]; then
-            bun_cache_path="$bun_default_cache"
-        fi
-
-        local bun_protected=false
-        is_path_whitelisted "$bun_cache_path" && bun_protected=true
-
-        if [[ "$bun_protected" == "true" ]]; then
-            if [[ "$bun_dry_run" == "true" ]]; then
-                echo -e "  ${YELLOW}${ICON_DRY_RUN}${NC} bun cache · would skip (whitelist)"
-            else
-                echo -e "  ${GREEN}${ICON_SUCCESS}${NC} bun cache · skipped (whitelist)"
-                note_activity
-            fi
-            bun_cache_cleaned=true
-        elif [[ "$bun_dry_run" != "true" ]]; then
-            if [[ -t 1 ]]; then
-                start_section_spinner "Cleaning bun cache..."
-            fi
-            local bun_rm_rc=0
-            run_with_timeout "$MOLE_TIMEOUT_PKG_LIST_SEC" bun pm cache rm > /dev/null 2>&1 || bun_rm_rc=$?
-            [[ $bun_rm_rc -ne 0 ]] || bun_cache_cleaned=true
-            if [[ -t 1 ]]; then
-                stop_section_spinner
-            fi
-            if mole_rc_signal "$bun_rm_rc"; then
-                # Ctrl-C while the owner command holds the terminal reaches
-                # only the child: stop instead of removing the cache directly.
-                debug_log "bun cache: owner command interrupted (exit $bun_rm_rc)"
-                _mole_record_clean_cancellation "$bun_rm_rc" "bun cache"
-                return "$bun_rm_rc"
-            fi
-            if [[ "$bun_cache_cleaned" == "true" ]]; then
-                echo -e "  ${GREEN}${ICON_SUCCESS}${NC} bun cache"
-                note_activity
-            fi
-        else
-            echo -e "  ${YELLOW}${ICON_DRY_RUN}${NC} bun cache · would clean"
-            note_activity
-            bun_cache_cleaned=true
-        fi
-
-        local bun_cache_path_normalized="${bun_cache_path%/}"
-        local bun_default_cache_normalized="${bun_default_cache%/}"
-        if [[ -d "$bun_cache_path_normalized" ]]; then
-            bun_cache_path_normalized=$(cd "$bun_cache_path_normalized" 2> /dev/null && pwd -P) || bun_cache_path_normalized="${bun_cache_path%/}"
-        fi
-        if [[ -d "$bun_default_cache_normalized" ]]; then
-            bun_default_cache_normalized=$(cd "$bun_default_cache_normalized" 2> /dev/null && pwd -P) || bun_default_cache_normalized="${bun_default_cache%/}"
-        fi
-
-        if [[ "$bun_cache_path_normalized" != "$bun_default_cache_normalized" ]]; then
-            safe_clean "$bun_default_cache"/* "Orphaned bun cache"
-        fi
-
-        # If bun pm cache rm fails, fall back to filesystem cleanup to avoid no-op.
-        if [[ "$bun_cache_cleaned" != "true" ]]; then
-            safe_clean "$bun_cache_path"/* "Bun cache"
-        fi
-    else
-        safe_clean "$bun_default_cache"/* "Bun cache"
-    fi
+    clean_bun_cache || return $?
 
     note_activity
     safe_clean ~/.tnpm/_cacache/* "tnpm cache directory"
     safe_clean ~/.tnpm/_logs/* "tnpm logs"
-    safe_clean ~/.yarn/cache/* "Yarn cache"
+    # Berry's global archives are installed dependencies loaded directly by
+    # Plug'n'Play projects; keep them even when Yarn and Node are not running.
+    # Keep the separate Classic download-cache target.
     safe_clean ~/Library/Caches/Yarn/* "Yarn v1 cache"
 }
 # Resolve a cache root to its physical location and prove that it remains a
@@ -868,7 +969,7 @@ clean_dev_python() {
     safe_clean ~/.cache/mypy/* "MyPy cache"
     safe_clean ~/.pytest_cache/* "Pytest cache"
     clean_pyinstaller_bincache
-    safe_clean ~/.jupyter/runtime/* "Jupyter runtime cache"
+    # Jupyter runtime files hold active kernel/server connections, not caches.
     # Hugging Face, PyTorch, TensorFlow and Weights & Biases keep downloaded
     # model weights, datasets and run artifacts here. Their roots are not
     # blanket caches: Hugging Face's own prune warns that interruption can
@@ -1036,14 +1137,34 @@ clean_go_cache_root() {
 
     local _MOLE_GO_CACHE_BOUND_REASON=""
     local command_status=0
-    if [[ "$DRY_RUN" != "true" && -t 1 ]]; then
-        start_section_spinner "Cleaning $display_name..."
+    local size_before_kb="" size_rc=0 freed_kb=0
+    if [[ "$DRY_RUN" != "true" ]]; then
+        [[ -t 1 ]] && start_section_spinner "Cleaning $display_name..."
+        # Same before/after measurement as clean_tool_cache.
+        size_before_kb=$(_owner_cache_size_kb "$cache_root") || size_rc=$?
+        if mole_rc_signal "$size_rc"; then
+            [[ -t 1 ]] && stop_section_spinner
+            _mole_record_clean_cancellation "$size_rc" "$display_name"
+            return "$size_rc"
+        fi
+        [[ $size_rc -eq 0 ]] || size_before_kb=""
     fi
     _run_go_cache_clean_bound \
         "$cache_root" "$physical_root" \
         "$lexical_parent" "$lexical_parent_id" "$lexical_target_id" \
         "$physical_parent" "$physical_parent_id" "$physical_target_id" \
         "$cache_kind" "$clean_flag" "$DRY_RUN" || command_status=$?
+    local after_rc=0
+    if [[ "$DRY_RUN" != "true" && $command_status -eq 0 && -n "$size_before_kb" ]]; then
+        local size_after_kb=0
+        if [[ -e "$cache_root" ]]; then
+            size_after_kb=$(_owner_cache_size_kb "$cache_root") || after_rc=$?
+            [[ $after_rc -eq 0 ]] || size_after_kb=""
+        fi
+        if [[ -n "$size_after_kb" ]] && ((size_before_kb > size_after_kb)); then
+            freed_kb=$((size_before_kb - size_after_kb))
+        fi
+    fi
     if [[ "$DRY_RUN" != "true" && -t 1 ]]; then
         stop_section_spinner
     fi
@@ -1051,10 +1172,17 @@ clean_go_cache_root() {
     if [[ $command_status -eq 0 ]]; then
         if [[ "$DRY_RUN" == "true" ]]; then
             echo -e "  ${YELLOW}${ICON_DRY_RUN}${NC} $display_name · would clean"
+        elif ((freed_kb > 0)); then
+            echo -e "  ${GREEN}${ICON_SUCCESS}${NC} $display_name · $(colorize_human_size "$(bytes_to_human_kb "$freed_kb")")"
+            mole_add_cleaned_row 0 "$freed_kb"
         else
             echo -e "  ${GREEN}${ICON_SUCCESS}${NC} $display_name"
         fi
         note_activity
+        if mole_rc_signal "$after_rc"; then
+            _mole_record_clean_cancellation "$after_rc" "$display_name"
+            return "$after_rc"
+        fi
         return 0
     fi
     if mole_rc_timeout "$command_status"; then
@@ -1325,13 +1453,31 @@ clean_dev_perl() {
     safe_clean ~/.cpan/build/* "CPAN build artifacts"
 }
 
-# Helper: Check for multiple versions in a directory.
-# Args: $1=directory, $2=tool_name, $3=list_command, $4=remove_command
+# Version folder names other than the one in use, host triple dropped
+# ("nightly and 1.95.0"), so the row names the candidates by itself.
+# Prints nothing when nothing besides the kept version is installed.
+_version_dirs_besides() {
+    local dir="$1" keep="${2:-}"
+    local -a others=()
+    local entry name
+    for entry in "$dir"/*; do
+        [[ -d "$entry" && ! -L "$entry" ]] || continue
+        name="${entry##*/}"
+        name="${name%-aarch64-apple-darwin}"
+        name="${name%-x86_64-apple-darwin}"
+        [[ "$name" == "$keep" ]] && continue
+        others+=("$name")
+    done
+    [[ ${#others[@]} -gt 0 ]] || return 0
+    mole_join_names "${others[@]}"
+}
+
+# Helper: report a folder holding several installed versions.
+# Args: $1=directory, $2=row label, $3=version kept in use (may be empty)
 check_multiple_versions() {
     local dir="$1"
     local tool_name="$2"
-    local list_cmd="${3:-}"
-    local remove_cmd="${4:-}"
+    local keep="${3:-}"
 
     if [[ ! -d "$dir" ]]; then
         return 0
@@ -1342,11 +1488,12 @@ check_multiple_versions() {
 
     if [[ "$count" -gt 1 ]]; then
         note_activity
-        local hint=""
-        if [[ -n "$list_cmd" ]]; then
-            hint=" ${GRAY}(${list_cmd})${NC}"
+        local fact=""
+        if [[ -n "$keep" ]]; then
+            fact=$(_version_dirs_besides "$dir" "$keep")
+            [[ -n "$fact" ]] && fact+=" besides $keep"
         fi
-        echo -e "  ${YELLOW}${ICON_REVIEW}${NC} ${tool_name} · ${count} found${hint}"
+        mole_review_row "$tool_name" "$dir" "$count" "$fact"
     fi
 }
 
@@ -1357,10 +1504,20 @@ check_rust_toolchains() {
     local rustup_home
     rustup_home=$(resolve_tool_home "${RUSTUP_HOME:-}" "${HOME}/.rustup")
 
+    # The default toolchain from rustup's own settings file, read without
+    # running rustup, which may try to sync a toolchain.
+    local default_toolchain=""
+    if [[ -f "${rustup_home}/settings.toml" ]]; then
+        default_toolchain=$(sed -n -E 's/^default_toolchain[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' \
+            "${rustup_home}/settings.toml" 2> /dev/null | head -1) || default_toolchain=""
+        default_toolchain="${default_toolchain%-aarch64-apple-darwin}"
+        default_toolchain="${default_toolchain%-x86_64-apple-darwin}"
+    fi
+
     check_multiple_versions \
         "${rustup_home}/toolchains" \
         "Rust toolchains" \
-        "rustup toolchain list"
+        "$default_toolchain"
 }
 # Docker caches (guarded by daemon check).
 find_orbstack_data_dir() {
@@ -1376,7 +1533,7 @@ find_orbstack_data_dir() {
 clean_dev_docker() {
     if command -v docker > /dev/null 2>&1; then
         note_activity
-        echo -e "  ${GRAY}${ICON_REVIEW}${NC} Docker unused data · review with docker system df"
+        echo -e "  ${GRAY}${ICON_REVIEW}${NC} Docker unused data · review with docker system df -v"
         debug_log "Docker daemon-managed cleanup skipped by default"
     fi
 
@@ -1397,7 +1554,7 @@ clean_dev_docker() {
         fi
         [[ -n "$orb_size" ]] && orb_size_label="$(bytes_to_human $((orb_size * 1024))) · "
         note_activity
-        echo -e "  ${GRAY}${ICON_REVIEW}${NC} OrbStack container data · ${orb_size_label}review with docker system df"
+        echo -e "  ${GRAY}${ICON_REVIEW}${NC} OrbStack container data · ${orb_size_label}review with docker system df -v"
         debug_log "OrbStack daemon-managed data left for manual prune ($orb_size KB)"
     fi
     safe_clean ~/.docker/buildx/cache/* "Docker BuildX cache"
@@ -1436,10 +1593,12 @@ clean_dev_frontend() {
 }
 # Check for multiple Android NDK versions.
 check_android_ndk() {
-    check_multiple_versions \
-        "$HOME/Library/Android/sdk/ndk" \
-        "Android NDK versions" \
-        "Android Studio → SDK Manager"
+    local ndk_dir="$HOME/Library/Android/sdk/ndk" newest=""
+    if [[ -d "$ndk_dir" ]]; then
+        newest=$(find "$ndk_dir" -mindepth 1 -maxdepth 1 -type d 2> /dev/null |
+            sed 's#.*/##' | sort -V | tail -1) || newest=""
+    fi
+    check_multiple_versions "$ndk_dir" "Android NDK versions" "$newest"
 }
 
 clean_xcode_documentation_cache() {
@@ -1765,59 +1924,6 @@ _xctest_devices_activity_state() {
 
 _xctest_devices_delete_guard_allows() {
     mole_clean_process_guard _xctest_devices_activity_state "Xcode, XCTest, or Simulator started"
-}
-
-_dev_process_delete_guard_allows() {
-    # safe_clean_guarded passes the leaf currently at its deletion boundary.
-    # Keep it in dynamic scope so compound probes such as the Cargo root guard
-    # can bind that exact object without changing ordinary process probes.
-    local _MOLE_DEV_GUARDED_PATH="${1:-}"
-    mole_clean_process_guard \
-        "$_MOLE_DEV_PROCESS_GUARD_PROBE" \
-        "$_MOLE_DEV_PROCESS_GUARD_FAMILY started" \
-        "${_MOLE_DEV_PROCESS_GUARD_UNKNOWN_REASON:-process state unknown}"
-}
-
-_dev_report_process_guard_stop() {
-    local display_name="$1"
-    local family="$2"
-    local reason="$3"
-
-    if [[ "$reason" == "process state unknown" || "$reason" == "process or cache path state unknown" ]]; then
-        echo -e "  ${GRAY}${ICON_WARNING}${NC} ${display_name} · stopped (${reason})"
-        note_activity
-    else
-        mole_defer_cleanup_family "$family"
-    fi
-}
-
-# Bind a tri-state process probe to safe_clean's post-size boundary. The local
-# guard state is intentionally dynamic so Bash 3.2 callbacks can read it.
-_dev_safe_clean_process_guarded() {
-    local probe="$1"
-    local family="$2"
-    local display_name="$3"
-    shift 3
-    local _MOLE_DEV_PROCESS_GUARD_PROBE="$probe"
-    local _MOLE_DEV_PROCESS_GUARD_FAMILY="$family"
-    local _MOLE_CLEAN_GUARD_REASON="${family} started"
-
-    if ! declare -f safe_clean_guarded > /dev/null 2>&1; then
-        if ! _dev_process_delete_guard_allows; then
-            _dev_report_process_guard_stop "$display_name" "$family" "$_MOLE_CLEAN_GUARD_REASON"
-            return 1
-        fi
-        safe_clean "$@"
-        return $?
-    fi
-
-    local guarded_rc=0
-    safe_clean_guarded _dev_process_delete_guard_allows "$@" || guarded_rc=$?
-    if [[ $guarded_rc -eq 75 ]]; then
-        _dev_report_process_guard_stop "$display_name" "$family" "$_MOLE_CLEAN_GUARD_REASON"
-        return 1
-    fi
-    return "$guarded_rc"
 }
 
 _dev_clean_service_worker_process_guarded() {
@@ -3548,14 +3654,35 @@ _versioned_agent_delete_guard_allows() {
         fi
     fi
 
-    local planned_target
+    local planned_target planned=false
     if [[ ${#_MOLE_VERSIONED_AGENT_CLEANUP_TARGETS[@]} -gt 0 ]]; then
         for planned_target in "${_MOLE_VERSIONED_AGENT_CLEANUP_TARGETS[@]}"; do
-            [[ "$planned_target" == "$target" ]] && return 0
+            [[ "$planned_target" == "$target" ]] && planned=true && break
         done
     fi
+    if [[ "$planned" != "true" ]]; then
+        _MOLE_CLEAN_GUARD_REASON="retention changed"
+        return 1
+    fi
 
-    _MOLE_CLEAN_GUARD_REASON="retention changed"
+    # A Claude Code session keeps running the version it started from, so a
+    # release older than the kept ones can still be executing: on 2026-10-31
+    # a session was found running 2.1.311 from the Trash. Keep a version any
+    # process has open, and keep it when lsof cannot tell; either concerns
+    # this version alone, so the rest of the family still goes. Mole Mac holds
+    # the same releases (embeddedAgentReleases).
+    local open_rc=0
+    _mole_container_cache_has_open_handle "$target" || open_rc=$?
+    [[ $open_rc -eq 1 ]] && return 0
+    if [[ $open_rc -gt 2 ]] && mole_rc_timeout_or_signal "$open_rc"; then
+        return "$open_rc"
+    fi
+    if [[ $open_rc -eq 0 ]]; then
+        debug_log "Versioned agent release kept, a process has it open: $target"
+    else
+        debug_log "Versioned agent release kept, open-file state unknown: $target"
+    fi
+    _MOLE_SAFE_CLEAN_SKIP_PATH="$target"
     return 1
 }
 
@@ -3609,9 +3736,13 @@ clean_versioned_agent_root() {
     local target
     for target in "${_MOLE_VERSIONED_AGENT_RETENTION_TARGETS[@]}"; do
         local guard_rc=0
+        _MOLE_SAFE_CLEAN_SKIP_PATH=""
         _versioned_agent_delete_guard_allows "$target" || guard_rc=$?
         if [[ $guard_rc -ne 0 ]]; then
             mole_rc_timeout_or_signal "$guard_rc" && return "$guard_rc"
+            # The same contract as safe_clean_guarded: a refusal that names
+            # this target keeps it alone.
+            [[ "$_MOLE_SAFE_CLEAN_SKIP_PATH" == "$target" ]] && continue
             _report_versioned_agent_guard_stop "$label"
             return 0
         fi
@@ -5809,11 +5940,11 @@ clean_dev_misc() {
     safe_clean ~/Library/Caches/KSCrash/* "KSCrash reports"
     safe_clean ~/Library/Caches/com.crashlytics.data/* "Crashlytics data"
     if [[ -d ~/Library/Application\ Support/Antigravity ]]; then
-        safe_clean ~/Library/Application\ Support/Antigravity/Cache/* "Antigravity cache"
-        safe_clean ~/Library/Application\ Support/Antigravity/Code\ Cache/* "Antigravity code cache"
-        safe_clean ~/Library/Application\ Support/Antigravity/GPUCache/* "Antigravity GPU cache"
-        safe_clean ~/Library/Application\ Support/Antigravity/DawnGraphiteCache/* "Antigravity Dawn cache"
-        safe_clean ~/Library/Application\ Support/Antigravity/DawnWebGPUCache/* "Antigravity WebGPU cache"
+        mole_safe_clean_app_cache "Antigravity" ~/Library/Application\ Support/Antigravity/Cache/* "Antigravity cache"
+        mole_safe_clean_app_cache "Antigravity" ~/Library/Application\ Support/Antigravity/Code\ Cache/* "Antigravity code cache"
+        mole_safe_clean_app_cache "Antigravity" ~/Library/Application\ Support/Antigravity/GPUCache/* "Antigravity GPU cache"
+        mole_safe_clean_app_cache "Antigravity" ~/Library/Application\ Support/Antigravity/DawnGraphiteCache/* "Antigravity Dawn cache"
+        mole_safe_clean_app_cache "Antigravity" ~/Library/Application\ Support/Antigravity/DawnWebGPUCache/* "Antigravity WebGPU cache"
     fi
     # Antigravity browser profile caches (~/.gemini)
     clean_antigravity_caches
@@ -5821,31 +5952,31 @@ clean_dev_misc() {
     clean_agent_browser_old_chrome
     # Filo (Electron)
     if [[ -d ~/Library/Application\ Support/Filo ]]; then
-        safe_clean ~/Library/Application\ Support/Filo/production/Cache/* "Filo cache"
-        safe_clean ~/Library/Application\ Support/Filo/production/Code\ Cache/* "Filo code cache"
-        safe_clean ~/Library/Application\ Support/Filo/production/GPUCache/* "Filo GPU cache"
-        safe_clean ~/Library/Application\ Support/Filo/production/DawnGraphiteCache/* "Filo Dawn cache"
-        safe_clean ~/Library/Application\ Support/Filo/production/DawnWebGPUCache/* "Filo WebGPU cache"
+        mole_safe_clean_app_cache "Filo" ~/Library/Application\ Support/Filo/production/Cache/* "Filo cache"
+        mole_safe_clean_app_cache "Filo" ~/Library/Application\ Support/Filo/production/Code\ Cache/* "Filo code cache"
+        mole_safe_clean_app_cache "Filo" ~/Library/Application\ Support/Filo/production/GPUCache/* "Filo GPU cache"
+        mole_safe_clean_app_cache "Filo" ~/Library/Application\ Support/Filo/production/DawnGraphiteCache/* "Filo Dawn cache"
+        mole_safe_clean_app_cache "Filo" ~/Library/Application\ Support/Filo/production/DawnWebGPUCache/* "Filo WebGPU cache"
     fi
     # Claude (Electron)
     if [[ -d ~/Library/Application\ Support/Claude ]]; then
-        safe_clean ~/Library/Application\ Support/Claude/Cache/* "Claude cache"
-        safe_clean ~/Library/Application\ Support/Claude/Code\ Cache/* "Claude code cache"
-        safe_clean ~/Library/Application\ Support/Claude/GPUCache/* "Claude GPU cache"
-        safe_clean ~/Library/Application\ Support/Claude/DawnGraphiteCache/* "Claude Dawn cache"
-        safe_clean ~/Library/Application\ Support/Claude/DawnWebGPUCache/* "Claude WebGPU cache"
-        safe_clean ~/Library/Application\ Support/Claude/sentry/* "Claude sentry cache"
+        mole_safe_clean_app_cache "Claude" ~/Library/Application\ Support/Claude/Cache/* "Claude cache"
+        mole_safe_clean_app_cache "Claude" ~/Library/Application\ Support/Claude/Code\ Cache/* "Claude code cache"
+        mole_safe_clean_app_cache "Claude" ~/Library/Application\ Support/Claude/GPUCache/* "Claude GPU cache"
+        mole_safe_clean_app_cache "Claude" ~/Library/Application\ Support/Claude/DawnGraphiteCache/* "Claude Dawn cache"
+        mole_safe_clean_app_cache "Claude" ~/Library/Application\ Support/Claude/DawnWebGPUCache/* "Claude WebGPU cache"
+        mole_safe_clean_app_cache "Claude" ~/Library/Application\ Support/Claude/sentry/* "Claude sentry cache"
     fi
     # Qoder (VS Code fork, Electron)
     if [[ -d ~/Library/Application\ Support/Qoder ]]; then
-        safe_clean ~/Library/Application\ Support/Qoder/Cache/* "Qoder cache"
-        safe_clean ~/Library/Application\ Support/Qoder/CachedData/* "Qoder cached data"
-        safe_clean ~/Library/Application\ Support/Qoder/CachedExtensionVSIXs/* "Qoder extension cache"
-        safe_clean ~/Library/Application\ Support/Qoder/Code\ Cache/* "Qoder code cache"
-        safe_clean ~/Library/Application\ Support/Qoder/GPUCache/* "Qoder GPU cache"
-        safe_clean ~/Library/Application\ Support/Qoder/DawnGraphiteCache/* "Qoder Dawn cache"
-        safe_clean ~/Library/Application\ Support/Qoder/DawnWebGPUCache/* "Qoder WebGPU cache"
-        safe_clean ~/Library/Application\ Support/Qoder/logs/* "Qoder logs"
+        mole_safe_clean_app_cache "Qoder" ~/Library/Application\ Support/Qoder/Cache/* "Qoder cache"
+        mole_safe_clean_app_cache "Qoder" ~/Library/Application\ Support/Qoder/CachedData/* "Qoder cached data"
+        mole_safe_clean_app_cache "Qoder" ~/Library/Application\ Support/Qoder/CachedExtensionVSIXs/* "Qoder extension cache"
+        mole_safe_clean_app_cache "Qoder" ~/Library/Application\ Support/Qoder/Code\ Cache/* "Qoder code cache"
+        mole_safe_clean_app_cache "Qoder" ~/Library/Application\ Support/Qoder/GPUCache/* "Qoder GPU cache"
+        mole_safe_clean_app_cache "Qoder" ~/Library/Application\ Support/Qoder/DawnGraphiteCache/* "Qoder Dawn cache"
+        mole_safe_clean_app_cache "Qoder" ~/Library/Application\ Support/Qoder/DawnWebGPUCache/* "Qoder WebGPU cache"
+        mole_safe_clean_app_cache "Qoder" ~/Library/Application\ Support/Qoder/logs/* "Qoder logs"
     fi
     # Prisma ORM engine binaries cache
     safe_clean ~/.cache/prisma/* "Prisma cache"
@@ -5870,7 +6001,13 @@ clean_dev_misc() {
     # Codex CLI working-directory caches (~/.codex)
     clean_codex_cli
     # Cursor Agent session logs (versions cleaned separately in clean_dev_ai_agents)
-    [[ -d "$HOME/.local/share/cursor-agent" ]] && safe_find_delete "$HOME/.local/share/cursor-agent" "*.log" "$MOLE_LOG_AGE_DAYS" "f"
+    if [[ -d "$HOME/.local/share/cursor-agent" ]]; then
+        local cursor_logs_rc=0
+        safe_find_delete "$HOME/.local/share/cursor-agent" "*.log" "$MOLE_LOG_AGE_DAYS" "f" || cursor_logs_rc=$?
+        if mole_rc_signal "$cursor_logs_rc"; then
+            return "$cursor_logs_rc"
+        fi
+    fi
     # Playwright browser revisions are hard-protected by should_protect_path,
     # so no safe_clean call here can ever remove them. They cost a 100-500 MB
     # CDN re-download and a stale registry link does not prove the user is done

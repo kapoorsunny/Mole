@@ -30,6 +30,33 @@ fi
 # shellcheck source=lib/core/app_protection_data.sh
 source "$_MOLE_CORE_DIR/app_protection_data.sh"
 
+# Each protected list joined once into an @(a|b|...) alternation. Clean
+# checks every candidate against about 480 patterns; one [[ == ]] on the
+# alternation runs that loop in bash's matcher instead of in shell code.
+# [[ == ]] reads @(...) without the extglob option. The patterns contain no
+# |, ( or ), so the alternation matches exactly what each pattern would.
+_MOLE_DATA_PROTECTED_GLOB=""
+_MOLE_CLEAN_PROTECTED_GLOB=""
+_mole_build_protected_globs() {
+    local IFS='|'
+    _MOLE_DATA_PROTECTED_GLOB="@(${DATA_PROTECTED_BUNDLES[*]})"
+    _MOLE_CLEAN_PROTECTED_GLOB="@(${SYSTEM_CRITICAL_BUNDLES[*]}|${DATA_PROTECTED_BUNDLES[*]})"
+}
+_mole_build_protected_globs
+
+# True when $1 matches the alternation $2. Bash 3.2 matches in wide
+# characters under a UTF-8 locale, which for this pattern costs about 1 MiB
+# of peak memory; the patterns are ASCII, so the C locale's byte matching
+# gives the same answer. A caller with nocasematch keeps its own locale,
+# because case folding of non-ASCII letters depends on it.
+_mole_matches_protected_glob() {
+    local value="$1"
+    local alternation="$2"
+    shopt -q nocasematch || local LC_ALL=C
+    # shellcheck disable=SC2053 # unquoted RHS is the glob alternation
+    [[ "$value" == $alternation ]]
+}
+
 # Return 0 when Xcode/build tooling is active, 1 after reliable no-match
 # results, and 2 when process ownership cannot be established.
 xcode_build_tooling_process_state() {
@@ -221,25 +248,13 @@ should_protect_data() {
             ;;
         com.tencent.* | com.sogou.* | com.baidu.* | com.googlecode.* | im.rime.*)
             # These might have wildcards, check detailed list
-            for pattern in "${DATA_PROTECTED_BUNDLES[@]}"; do
-                # shellcheck disable=SC2053 # unquoted RHS is the glob, as in bundle_matches_pattern
-                if [[ -n "$pattern" && "$bundle_id" == $pattern ]]; then
-                    return 0
-                fi
-            done
-            return 1
+            _mole_matches_protected_glob "$bundle_id" "$_MOLE_DATA_PROTECTED_GLOB"
+            return
             ;;
     esac
 
     # Fallback: check against the full DATA_PROTECTED_BUNDLES list
-    for pattern in "${DATA_PROTECTED_BUNDLES[@]}"; do
-        # shellcheck disable=SC2053 # unquoted RHS is the glob, as in bundle_matches_pattern
-        if [[ -n "$pattern" && "$bundle_id" == $pattern ]]; then
-            return 0
-        fi
-    done
-
-    return 1
+    _mole_matches_protected_glob "$bundle_id" "$_MOLE_DATA_PROTECTED_GLOB"
 }
 
 # Endpoint security / EDR / MDM agents (CrowdStrike Falcon, SentinelOne, ESET,
@@ -392,11 +407,13 @@ should_protect_path() {
     local path="$1"
     [[ -z "$path" ]] && return 1
 
-    # Local database state and recovery copies are not rebuildable caches.
+    # Local database/session state, installed dependencies and recovery copies are not rebuildable caches.
     # Explicit uninstall retains its separate reviewed-data policy.
     if [[ "${MOLE_UNINSTALL_MODE:-0}" != "1" ]]; then
         case "$path" in
             "$HOME/.prometheus/data" | "$HOME/.prometheus/data/"* | \
+                "$HOME/.jupyter/runtime" | "$HOME/.jupyter/runtime/"* | \
+                "$HOME/.yarn/berry/cache" | "$HOME/.yarn/berry/cache/"* | \
                 "$HOME/.gitconfig.lock" | "$HOME/.gitconfig.bak"* | \
                 "$HOME/.config/fish/fish_history.bak"* | \
                 "$HOME/.bash_history.bak"* | "$HOME/.zsh_history.bak"*)
@@ -641,12 +658,9 @@ should_protect_path() {
             done
         else
             # Normal mode (cleanup): protect both system-critical and data-protected bundles
-            for pattern in "${SYSTEM_CRITICAL_BUNDLES[@]}" "${DATA_PROTECTED_BUNDLES[@]}"; do
-                # shellcheck disable=SC2053 # unquoted RHS is the glob, as in bundle_matches_pattern
-                if [[ -n "$pattern" && "$path" == $pattern ]]; then
-                    return 0
-                fi
-            done
+            if _mole_matches_protected_glob "$path" "$_MOLE_CLEAN_PROTECTED_GLOB"; then
+                return 0
+            fi
         fi
 
         # 7. Check if the filename itself matches any protected patterns
@@ -933,20 +947,42 @@ find_shared_app_paths() {
     shift 2
     local _MOLE_UNINSTALL_DISCOVERY_DEADLINE="${_MOLE_UNINSTALL_DISCOVERY_DEADLINE:-$((SECONDS + MOLE_TIMEOUT_DISK_VERIFY_SEC))}"
 
-    [[ -n "$app_name" && ${#app_name} -ge 5 ]] || return 0
-    _mole_uninstall_is_common_app_name "$app_name" && return 0
-
     local product_token=""
     local token_pair
     if token_pair=$(_mole_uninstall_vendor_product_tokens "$bundle_id" 2> /dev/null); then
         IFS='|' read -r _ product_token <<< "$token_pair"
     fi
 
-    local app_lower nospace_lower hyphen_lower underscore_lower product_lower
-    app_lower=$(_mole_uninstall_lower "$app_name")
-    nospace_lower=$(_mole_uninstall_lower "${app_name// /}")
-    hyphen_lower=$(_mole_uninstall_lower "${app_name// /-}")
-    underscore_lower=$(_mole_uninstall_lower "${app_name// /_}")
+    # A localized display name can be short or non-Latin ("UU远程", four
+    # characters) while the folder carries the unlocalized product name
+    # (/Users/Shared/UURemote, bundle id com.netease.uuremote), which an
+    # English locale already reached through the name. Such a name still
+    # reaches the folder through the product token alone, held to the same
+    # length and common-name gate (Mole Mac alternateIdentityPatterns).
+    # A common display name ("Music", "Files") stops discovery instead: its
+    # product token is just as generic and /Users/Shared/Audio is not its own.
+    _mole_uninstall_is_common_app_name "$app_name" && return 0
+    local name_usable=true
+    if [[ -z "$app_name" || ${#app_name} -lt 5 ]]; then
+        name_usable=false
+    fi
+    if [[ "$name_usable" != "true" ]]; then
+        [[ ${#product_token} -ge 5 ]] || return 0
+        _mole_uninstall_is_common_app_name "$product_token" && return 0
+        # Platform words name no product on their own (com.thebrowser.Browser,
+        # com.vendor.desktop), so they never stand in for the display name.
+        case "$(_mole_uninstall_lower "$product_token")" in
+            browser | desktop | macos | application | mac-app | macapp | osx-app) return 0 ;;
+        esac
+    fi
+
+    local app_lower="" nospace_lower="" hyphen_lower="" underscore_lower="" product_lower
+    if [[ "$name_usable" == "true" ]]; then
+        app_lower=$(_mole_uninstall_lower "$app_name")
+        nospace_lower=$(_mole_uninstall_lower "${app_name// /}")
+        hyphen_lower=$(_mole_uninstall_lower "${app_name// /-}")
+        underscore_lower=$(_mole_uninstall_lower "${app_name// /_}")
+    fi
     product_lower=$(_mole_uninstall_lower "$product_token")
 
     local scan_file=""
@@ -965,6 +1001,12 @@ find_shared_app_paths() {
         while IFS= read -r -d '' candidate; do
             base="${candidate##*/}"
             lower_base=$(_mole_uninstall_lower "$base")
+            if [[ "$name_usable" != "true" ]]; then
+                # The product token alone names only its exact folder, never
+                # "<token> Data" or "<token>-cache" (com.vendor.player).
+                [[ "$lower_base" == "$product_lower" ]] && matched_paths+=("$candidate")
+                continue
+            fi
             if _mole_uninstall_name_variant_matches "$lower_base" \
                 "$app_lower" "$nospace_lower" "$hyphen_lower" "$underscore_lower" "$product_lower"; then
                 matched_paths+=("$candidate")
@@ -1016,6 +1058,67 @@ _path_belongs_to_independent_cli() {
             ;;
     esac
     return 1
+}
+
+# Metadata-backed leftovers use the same bounded owner probe at discovery
+# and immediately before their individual sink. A missing answer never owns it.
+mole_uninstall_jetbrains_selector() {
+    local app_path="$1" bundle_id="$2" selector="" rc=0 timeout=""
+    mole_ascii_lowercase bundle_id "$bundle_id"
+    [[ "$bundle_id" == com.jetbrains.* && -f "$app_path/Contents/Info.plist" &&
+        ! -L "$app_path/Contents/Info.plist" ]] || return 1
+    timeout=$(_mole_timeout_with_deadline "$MOLE_TIMEOUT_QUICK_DETECT_SEC" \
+        "${_MOLE_UNINSTALL_DISCOVERY_DEADLINE:-$((SECONDS + MOLE_TIMEOUT_QUICK_DETECT_SEC))}") || return 1
+    selector=$(run_with_timeout "$timeout" /usr/libexec/PlistBuddy \
+        -c 'Print :JVMOptions:Properties:idea.paths.selector' \
+        "$app_path/Contents/Info.plist" 2> /dev/null) || rc=$?
+    mole_rc_signal "$rc" && return "$rc"
+    [[ $rc -eq 0 && "$selector" =~ ^[A-Za-z][A-Za-z0-9]*[0-9]{4}\.[0-9]+([.][0-9]+)?$ ]] || return 1
+    printf '%s\n' "$selector"
+}
+
+mole_uninstall_uuid_container_owned() {
+    local path="$1" bundle_id="$2" name="${1##*/}"
+    [[ "${path%/*}" == "$HOME/Library/Containers" && -d "$path" && ! -L "$path" ]] || return 1
+    [[ "$name" =~ ^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$ ]] || return 1
+    mole_is_reverse_dns_bundle_id "$bundle_id" || return 1
+    local metadata="$path/.com.apple.containermanagerd.metadata.plist"
+    [[ -f "$metadata" && ! -L "$metadata" ]] || return 1
+    local owner="" timeout="" rc=0
+    timeout=$(_mole_timeout_with_deadline "$MOLE_TIMEOUT_QUICK_DETECT_SEC" \
+        "${_MOLE_UNINSTALL_DISCOVERY_DEADLINE:-$((SECONDS + MOLE_TIMEOUT_QUICK_DETECT_SEC))}") || return 1
+    owner=$(run_with_timeout "$timeout" /usr/bin/plutil -extract MCMMetadataIdentifier raw "$metadata" 2> /dev/null) || rc=$?
+    mole_rc_signal "$rc" && return "$rc"
+    [[ $rc -eq 0 && "$owner" == "$bundle_id" ]]
+}
+
+mole_uninstall_native_manifest_owned() {
+    local path="$1" app_path="$2"
+    [[ "${path%/*}" == "$HOME/Library/Application Support/"*/NativeMessagingHosts &&
+        "$path" == *.json && -f "$path" && ! -L "$path" &&
+        "$app_path" == /*.app && ! "$app_path" =~ [[:cntrl:]] ]] || return 1
+    local bytes="" host="" timeout="" rc=0
+    local _MOLE_UNINSTALL_DISCOVERY_DEADLINE="${_MOLE_UNINSTALL_DISCOVERY_DEADLINE:-$((SECONDS + MOLE_TIMEOUT_QUICK_DETECT_SEC))}"
+    timeout=$(_mole_timeout_with_deadline "$MOLE_TIMEOUT_QUICK_DETECT_SEC" \
+        "$_MOLE_UNINSTALL_DISCOVERY_DEADLINE") || return 1
+    bytes=$(run_with_timeout "$timeout" "$STAT_BSD" -f%z "$path" 2> /dev/null) || rc=$?
+    mole_rc_signal "$rc" && return "$rc"
+    [[ $rc -eq 0 && "$bytes" =~ ^[0-9]+$ && ${#bytes} -le 5 && "$bytes" -le 65536 ]] || return 1
+    timeout=$(_mole_timeout_with_deadline "$MOLE_TIMEOUT_QUICK_DETECT_SEC" \
+        "$_MOLE_UNINSTALL_DISCOVERY_DEADLINE") || return 1
+    host=$(run_with_timeout "$timeout" /usr/bin/plutil -extract path raw "$path" 2> /dev/null) || rc=$?
+    mole_rc_signal "$rc" && return "$rc"
+    [[ $rc -eq 0 && "$host" == "$app_path"/* &&
+        ! "$host" =~ (^|/)\.\.(/|$) && ! "$host" =~ [[:cntrl:]] ]] || return 1
+    # While the bundle exists, prove the executable's physical parent too.
+    # After its move the reviewed manifest hash pins this same launch target.
+    if [[ -d "$app_path" ]]; then
+        [[ -f "$host" && ! -L "$host" ]] || return 1
+        local app_root="" host_parent=""
+        app_root=$(cd -P "$app_path" 2> /dev/null && pwd -P) || return 1
+        host_parent=$(cd -P "${host%/*}" 2> /dev/null && pwd -P) || return 1
+        [[ "$host_parent" == "$app_root" || "$host_parent" == "$app_root"/* ]] || return 1
+    fi
 }
 
 _mole_uninstall_embedded_bundle_ids() {
@@ -1139,6 +1242,77 @@ mole_playcover_alias_target() {
     printf '%s\n' "$target"
 }
 
+# Whether another build of an app family is installed: the stable app
+# ("Zed.app"), a channel ("Zed Nightly.app") or a second copy of the same name
+# in /Applications or ~/Applications, other than the app being removed. Its
+# name-derived folders ("Application Support/Zed") are that build's data too,
+# so an uninstall must not take them (Mole Mac RemnantScanner
+# markingDefaultSelectableData). Only ever narrows what is removed.
+_mole_app_family_sibling_installed() {
+    local family="$1"
+    local app_path="${2:-}"
+    local suffixes="$3"
+    [[ -n "$family" ]] || return 1
+    local -a roots=("/Applications" "$HOME/Applications")
+    # Test-only: Bats exports BATS_TEST_FILENAME, so a suite never reads the
+    # host's /Applications (tests/helpers/common.bash sets an empty root).
+    if [[ "${MOLE_TEST_MODE:-0}" == "1" || "${MOLE_TEST_NO_AUTH:-0}" == "1" ||
+        -n "${BATS_TEST_FILENAME:-}" ]] && [[ -n "${MOLE_TEST_APP_FAMILY_ROOT:-}" ]]; then
+        roots=("$MOLE_TEST_APP_FAMILY_ROOT")
+    fi
+    local root candidate stem channel
+    for root in "${roots[@]}"; do
+        [[ -d "$root" ]] || continue
+        for candidate in "$root/$family".[aA][pP][pP] "$root/$family "*.[aA][pP][pP]; do
+            [[ -d "$candidate" ]] || continue
+            if [[ -n "$app_path" && -e "$app_path" && "$candidate" -ef "$app_path" ]]; then
+                continue
+            fi
+            stem="${candidate##*/}"
+            stem="${stem%.*}"
+            [[ "$stem" == "$family" ]] && return 0
+            channel="${stem#"$family" }"
+            [[ "$channel" != "$stem" && "$channel" =~ ^(${suffixes})$ ]] && return 0
+        done
+    done
+    return 1
+}
+
+# The base name an app's family shares: "Zed Nightly" and "Zed" are both "Zed".
+_mole_app_family_suffixes="Nightly|Beta|Alpha|Dev|Canary|Preview|Insider|Edge|Stable|Release|RC|LTS"
+_mole_app_family_suffixes+="|Developer Edition|Technology Preview"
+
+# Print the lowercase name leaves ("zed", "zed-nightly"...) of the family that
+# another installed build still uses, or nothing when no other build is
+# installed. While one is, those name-derived leaves are its data too.
+_mole_app_family_shared_leaves() {
+    local app_name="$1" app_path="${2:-}"
+    local base_name="$app_name"
+    if [[ "$app_name" =~ ^(.+)[[:space:]]+(${_mole_app_family_suffixes})$ ]]; then
+        base_name="${BASH_REMATCH[1]}"
+    fi
+    _mole_app_family_sibling_installed "$base_name" "$app_path" "$_mole_app_family_suffixes" || return 0
+    local variant
+    for variant in "$base_name" "${base_name// /}" "${base_name// /-}" "${base_name// /_}"; do
+        printf '%s\n' "$variant" | /usr/bin/tr '[:upper:]' '[:lower:]'
+    done
+}
+
+# 0 when the path's leaf, minus .plist or .savedState, is one of the leaves.
+_mole_path_is_family_leaf() {
+    local candidate_leaf="${1%/}"
+    shift
+    candidate_leaf="${candidate_leaf##*/}"
+    candidate_leaf="${candidate_leaf%.plist}"
+    candidate_leaf="${candidate_leaf%.savedState}"
+    candidate_leaf=$(printf '%s' "$candidate_leaf" | /usr/bin/tr '[:upper:]' '[:lower:]')
+    local family_leaf
+    for family_leaf in "$@"; do
+        [[ "$candidate_leaf" == "$family_leaf" ]] && return 0
+    done
+    return 1
+}
+
 find_app_files() {
     local bundle_id="$1"
     local app_name="$2"
@@ -1245,6 +1419,9 @@ find_app_files() {
             "$HOME/Library/SyncedPreferences/$bundle_id.plist"
             # PLCrashReporter keeps one folder per bundle id under its own root (#1736).
             "$HOME/Library/Caches/com.plausiblelabs.crashreporter.data/$bundle_id"
+            "$HOME/Library/Caches/$bundle_id.ShipIt"
+            "$HOME/Library/Caches/com.crashlytics.data/$bundle_id"
+            "$HOME/Library/Application Support/com.bugsnag.Bugsnag/$bundle_id"
         )
         # The per-user Darwin cache root holds a folder named by the exact
         # bundle id too. An unresolved root skips this one path, a signal stops.
@@ -1256,6 +1433,25 @@ find_app_files() {
         if [[ $darwin_cache_rc -eq 0 && -n "$darwin_cache_root" ]]; then
             user_patterns+=("$darwin_cache_root/$bundle_id")
         fi
+    fi
+
+    # Exact product leaves only; framework parents belong to many apps.
+    # Shared runtime names cannot establish an updater or crash-folder owner.
+    if [[ ${#app_name} -ge 3 && "$app_name" != *[/\\]* &&
+        ! "$app_name" =~ [[:cntrl:]] ]] &&
+        ! _mole_uninstall_is_common_app_name "$app_name" &&
+        [[ "$lowercase_name" != electron ]]; then
+        user_patterns+=(
+            "$HOME/Library/Caches/SentryCrash/$app_name"
+            "$HOME/Library/Caches/KSCrash/$app_name"
+        )
+        local updater_name
+        for updater_name in "$hyphen_name" "$lowercase_hyphen" "$nospace_name" "$lowercase_nospace"; do
+            user_patterns+=(
+                "$HOME/Library/Caches/$updater_name-updater"
+                "$HOME/Library/Application Support/Caches/$updater_name-updater"
+            )
+        done
     fi
 
     # A bundle id's last segment often names the data directory more precisely
@@ -1511,6 +1707,55 @@ find_app_files() {
         done
     fi
 
+    # UUID container names carry no app identity; their owner metadata does.
+    if [[ "$bundle_id_valid" == true && -d "$HOME/Library/Containers" ]]; then
+        discovery_scan_rc=0
+        _mole_uninstall_materialize_find0 "$discovery_scan_file" \
+            "$HOME/Library/Containers" -mindepth 1 -maxdepth 1 -type d -print0 || discovery_scan_rc=$?
+        if [[ $discovery_scan_rc -ne 0 ]]; then
+            rm -f -- "$discovery_scan_file" 2> /dev/null || true # SAFE: exact tracked temp file created above
+            return "$discovery_scan_rc"
+        fi
+        local candidate owner_rc
+        # shellcheck disable=SC2094 # On failure remove the tracked scan after its last read.
+        while IFS= read -r -d '' candidate; do
+            owner_rc=0
+            mole_uninstall_uuid_container_owned "$candidate" "$bundle_id" || owner_rc=$?
+            if mole_rc_timeout_or_signal "$owner_rc"; then
+                rm -f -- "$discovery_scan_file" 2> /dev/null || true # SAFE: exact tracked temp file created above
+                return "$owner_rc"
+            fi
+            [[ $owner_rc -ne 0 ]] || files_to_clean+=("$candidate")
+        done < "$discovery_scan_file"
+    fi
+
+    # Only manifests launching into this exact app are owned. Inspect host
+    # registries directly, without traversing unrelated browser profile data.
+    if [[ "$bundle_id_valid" == true && "$app_path" == /*.app ]]; then
+        local hosts_root manifest manifest_rc
+        for hosts_root in "$HOME/Library/Application Support/"*/NativeMessagingHosts \
+            "$HOME/Library/Application Support/"*/*/NativeMessagingHosts; do
+            [[ -d "$hosts_root" && ! -L "$hosts_root" ]] || continue
+            discovery_scan_rc=0
+            _mole_uninstall_materialize_find0 "$discovery_scan_file" \
+                "$hosts_root" -mindepth 1 -maxdepth 1 -type f -name '*.json' -print0 || discovery_scan_rc=$?
+            if [[ $discovery_scan_rc -ne 0 ]]; then
+                rm -f -- "$discovery_scan_file" 2> /dev/null || true # SAFE: exact tracked temp file created above
+                return "$discovery_scan_rc"
+            fi
+            # shellcheck disable=SC2094 # On failure remove the tracked scan after its last read.
+            while IFS= read -r -d '' manifest; do
+                manifest_rc=0
+                mole_uninstall_native_manifest_owned "$manifest" "$app_path" || manifest_rc=$?
+                if mole_rc_timeout_or_signal "$manifest_rc"; then
+                    rm -f -- "$discovery_scan_file" 2> /dev/null || true # SAFE: exact tracked temp file created above
+                    return "$manifest_rc"
+                fi
+                [[ $manifest_rc -ne 0 ]] || files_to_clean+=("$manifest")
+            done < "$discovery_scan_file"
+        done
+    fi
+
     # Shared file lists (recent documents etc.). Keep the root exact: only
     # per-app ApplicationRecentDocuments files named by bundle id are owned by
     # the uninstall target.
@@ -1722,6 +1967,30 @@ find_app_files() {
         done
     fi
 
+    local selector_bundle_id
+    mole_ascii_lowercase selector_bundle_id "$bundle_id"
+    if [[ "$collect_toolchain_leftovers" == true && "$selector_bundle_id" == com.jetbrains.* && -n "$app_path" ]]; then
+        local selector="" selector_rc=0
+        if [[ "$app_path" == "${_MOLE_UNINSTALL_SELECTOR_APP:-}" ]]; then
+            selector="${_MOLE_UNINSTALL_SELECTED_SELECTOR:-}"
+            [[ -n "$selector" ]] || selector_rc=1
+        else
+            selector=$(mole_uninstall_jetbrains_selector "$app_path" "$bundle_id") || selector_rc=$?
+        fi
+        if mole_rc_timeout_or_signal "$selector_rc"; then
+            rm -f -- "$discovery_scan_file" 2> /dev/null || true # SAFE: exact tracked temp file created above
+            return "$selector_rc"
+        fi
+        if [[ $selector_rc -eq 0 ]]; then
+            local selector_root
+            for selector_root in "$HOME/Library/Application Support/JetBrains" \
+                "$HOME/Library/Caches/JetBrains" "$HOME/Library/Logs/JetBrains" \
+                "$HOME/Library/Preferences"; do
+                [[ ! -d "$selector_root/$selector" ]] || files_to_clean+=("$selector_root/$selector")
+            done
+        fi
+    fi
+
     # Unity and Epic roots hold shared engines, assets and licence state.
     # An app uninstall cannot claim them; exact per-app caches above remain.
     # 5. Godot
@@ -1884,6 +2153,18 @@ find_app_files() {
         done
     fi
 
+    # While another build of the family is installed, the family's
+    # name-derived leaves ("Zed", "zed", ".plist", ".savedState") are its data
+    # too: a channel build never takes the stable app's folders, and the stable
+    # app never takes folders a channel still uses. Bundle-id leaves stay.
+    local family_shared=false
+    local -a family_leaves=()
+    local family_leaf_line
+    while IFS= read -r family_leaf_line; do
+        [[ -n "$family_leaf_line" ]] && family_leaves+=("$family_leaf_line")
+    done < <(_mole_app_family_shared_leaves "$app_name" "$app_path")
+    [[ ${#family_leaves[@]} -gt 0 ]] && family_shared=true
+
     # Preserve discovery order while collapsing exact duplicates. A leftover
     # can be found first through a bundle-id prefix and again through an
     # embedded extension id; it should be previewed and removed only once.
@@ -1894,6 +2175,10 @@ find_app_files() {
         local duplicate_path=false
         for candidate_path in "${files_to_clean[@]}"; do
             duplicate_path=false
+            if [[ "$family_shared" == "true" ]] &&
+                _mole_path_is_family_leaf "$candidate_path" "${family_leaves[@]}"; then
+                continue
+            fi
             if [[ ${#unique_files_to_clean[@]} -gt 0 ]]; then
                 for seen_path in "${unique_files_to_clean[@]}"; do
                     if [[ "$candidate_path" == "$seen_path" ]]; then
@@ -1904,7 +2189,9 @@ find_app_files() {
             fi
             [[ "$duplicate_path" == "true" ]] || unique_files_to_clean+=("$candidate_path")
         done
-        printf '%s\n' "${unique_files_to_clean[@]}"
+        if [[ ${#unique_files_to_clean[@]} -gt 0 ]]; then
+            printf '%s\n' "${unique_files_to_clean[@]}"
+        fi
     fi
     rm -f -- "$discovery_scan_file" 2> /dev/null || true # SAFE: exact tracked temp file created above
     return 0
@@ -1983,6 +2270,7 @@ get_diagnostic_report_paths_for_app() {
 find_app_system_files() {
     local bundle_id="$1"
     local app_name="$2"
+    local app_path="${3:-}"
     local _MOLE_UNINSTALL_DISCOVERY_DEADLINE="${_MOLE_UNINSTALL_DISCOVERY_DEADLINE:-$((SECONDS + MOLE_TIMEOUT_DISK_VERIFY_SEC))}"
     local -a system_files=()
     local system_scan_file=""
@@ -2233,9 +2521,22 @@ find_app_system_files() {
         return "$system_scan_rc"
     fi
 
-    local combined_files=""
+    # Same family rule as find_app_files: /Library/Application Support/Firefox
+    # stays while Firefox Developer Edition is installed.
+    local -a family_leaves=()
+    local family_leaf_line
+    while IFS= read -r family_leaf_line; do
+        [[ -n "$family_leaf_line" ]] && family_leaves+=("$family_leaf_line")
+    done < <(_mole_app_family_shared_leaves "$app_name" "$app_path")
+    local combined_files="" system_file
     if [[ ${#system_files[@]} -gt 0 ]]; then
-        combined_files=$(printf '%s\n' "${system_files[@]}")
+        for system_file in "${system_files[@]}"; do
+            if [[ ${#family_leaves[@]} -gt 0 ]] &&
+                _mole_path_is_family_leaf "$system_file" "${family_leaves[@]}"; then
+                continue
+            fi
+            combined_files+="${combined_files:+$'\n'}$system_file"
+        done
     fi
 
     if [[ -n "$receipt_files" ]]; then
@@ -2528,8 +2829,8 @@ force_kill_app() {
         else
             # Escape embedded double quotes in app_name before passing into
             # the AppleScript literal.
-            local escaped_name="${app_name//\\/\\\\}"
-            escaped_name="${escaped_name//\"/\\\"}"
+            local escaped_name=""
+            mole_applescript_escape escaped_name "$app_name"
             quit_target="\"$escaped_name\""
         fi
         run_with_timeout "$MOLE_TIMEOUT_SHORT_QUERY_SEC" osascript -e "tell application $quit_target to quit" > /dev/null 2>&1 < /dev/null &

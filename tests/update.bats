@@ -1024,6 +1024,31 @@ EOF
 	[[ "$output" == *"[update] REBUILT Homebrew mole (updated to 9.9.9)"* ]]
 }
 
+@test "Homebrew update logs the change before an interruptible highlights fetch" {
+	run env HOME="$HOME/interrupted-highlights" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+mkdir -p "$HOME"
+source "$PROJECT_ROOT/lib/core/common.sh"
+run_with_timeout() {
+	shift
+	case "$*" in
+		"brew upgrade mole") printf '==> Upgrading mole\n' ;;
+		"brew list --versions mole") printf 'mole 9.9.9\n' ;;
+	esac
+}
+# Ctrl-C during the network fetch ends the run after brew already upgraded.
+mole_print_release_highlights() { exit 130; }
+(update_via_homebrew "1.0.0") || true
+cat "$OPERATIONS_LOG_FILE"
+EOF
+
+	[ "$status" -eq 0 ] || {
+		echo "$output"
+		return 1
+	}
+	[[ "$output" == *"[update] REBUILT Homebrew mole (updated to 9.9.9)"* ]]
+}
+
 @test "mo update preserves actionable Homebrew diagnostics on failure (#1247)" {
 	local fake_brew_bin="$TEST_ROOT/homebrew/bin"
 	local fake_brew_mole="$TEST_ROOT/homebrew/Cellar/mole/9.9.9/bin/mole"
@@ -2452,4 +2477,76 @@ mole_update_message_cache_is_current() { return 0; }
 [[ "$(read_update_message_cache "$notice")" == 'Update 9.9.9 available, run mo update' ]] || exit 1
 SCRIPT
     [ "$status" -eq 0 ]
+}
+
+@test "system proxy lookup prefers HTTPS, then HTTP, then SOCKS, and rejects malformed hosts" {
+ run env -u https_proxy -u HTTPS_PROXY -u all_proxy -u ALL_PROXY /bin/bash <<'SCRIPT'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/manage/update.sh"
+MOLE_SCUTIL_BIN="$HOME/scutil"
+fixture() { printf '#!/bin/bash\ncat <<D\n<dictionary> {\n%s\n}\nD\n' "$1" > "$MOLE_SCUTIL_BIN"; chmod +x "$MOLE_SCUTIL_BIN"; }
+fixture $'  HTTPEnable : 1\n  HTTPPort : 8080\n  HTTPProxy : 10.0.0.2\n  HTTPSEnable : 1\n  HTTPSPort : 7890\n  HTTPSProxy : 127.0.0.1'
+[[ "$(mole_system_proxy_url)" == http://127.0.0.1:7890 ]] || exit 1
+fixture $'  HTTPEnable : 1\n  HTTPPort : 8080\n  HTTPProxy : proxy.local\n  HTTPSEnable : 0'
+[[ "$(mole_system_proxy_url)" == http://proxy.local:8080 ]] || exit 2
+fixture $'  SOCKSEnable : 1\n  SOCKSPort : 1080\n  SOCKSProxy : 127.0.0.1'
+[[ "$(mole_system_proxy_url)" == socks5h://127.0.0.1:1080 ]] || exit 3
+fixture $'  HTTPSEnable : 0\n  HTTPSPort : 7890\n  HTTPSProxy : 127.0.0.1'
+[[ -z "$(mole_system_proxy_url)" ]] || exit 4
+fixture $'  HTTPSEnable : 1\n  HTTPSPort : 7890\n  HTTPSProxy : bad;host'
+[[ -z "$(mole_system_proxy_url)" ]] || exit 5
+https_proxy=http://env.example:3128
+mole_use_system_proxy_if_unset
+[[ "$https_proxy" == http://env.example:3128 ]] || exit 6
+SCRIPT
+ [ "$status" -eq 0 ]
+}
+
+@test "background update lookup waits longer and follows the system proxy while foreground lookups do not" {
+ run env -u https_proxy -u HTTPS_PROXY -u all_proxy -u ALL_PROXY /bin/bash <<'SCRIPT'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/manage/update.sh"
+VERSION=1.0.0
+MOLE_SCUTIL_BIN="$HOME/scutil"
+printf '#!/bin/bash\nprintf "  HTTPSEnable : 1\\n  HTTPSPort : 7890\\n  HTTPSProxy : 127.0.0.1\\n"\n' > "$MOLE_SCUTIL_BIN"
+chmod +x "$MOLE_SCUTIL_BIN"
+get_install_channel() { echo stable; }
+is_homebrew_install() { return 1; }
+curl() { printf '%s proxy=%s\n' "$*" "${https_proxy:-}" >> "$HOME/curl-calls"; printf '{"tag_name":"V9.8.7"}\n'; }
+check_for_updates
+for _ in $(seq 1 30); do [[ -s "$HOME/.cache/mole/update_message" ]] && break; sleep 0.1; done
+grep -q -- '--max-time 6 .*proxy=http://127.0.0.1:7890' "$HOME/curl-calls" || exit 1
+[[ "$(cat "$HOME/.cache/mole/update_message")" == *9.8.7* ]] || exit 2
+: > "$HOME/curl-calls"
+get_latest_version_from_github > /dev/null
+grep -q -- '--max-time 3 .*proxy=$' "$HOME/curl-calls" || exit 3
+SCRIPT
+ [ "$status" -eq 0 ]
+}
+
+@test "release highlights take the first changelog titles and stop at the next section" {
+ run /bin/bash <<'SCRIPT'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+body=$'Intro\r\n### Changelog\r\n\r\n1. Clearer clean output: Rows say what they hold.\r\n2. `mo slim` is safer: detail\r\n3. Plain item without a colon\r\n4. Fourth: x\r\n5. Fifth: y\r\n\r\n### 更新日志\r\n1. 中文: 不应出现'
+got=$(mole_release_highlight_titles "$body" 4)
+want=$'Clearer clean output\n`mo slim` is safer\nPlain item without a colon\nFourth'
+[[ "$got" == "$want" ]] || { printf 'got: %s\n' "$got"; exit 1; }
+[[ -z "$(mole_release_highlight_titles 'no list here' 4)" ]] || exit 1
+SCRIPT
+ [ "$status" -eq 0 ]
+}
+
+@test "release highlights stay silent off a terminal and never fetch there" {
+ run /bin/bash <<'SCRIPT'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+curl() { touch "$HOME/fetched"; printf '{"body":"### Changelog\\n1. A: b"}\n'; }
+out=$(mole_print_release_highlights 9.8.7)
+[[ -z "$out" ]] || { echo "printed: $out"; exit 1; }
+[[ ! -e "$HOME/fetched" ]] || exit 1
+SCRIPT
+ [ "$status" -eq 0 ]
 }

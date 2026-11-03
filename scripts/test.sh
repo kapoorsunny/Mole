@@ -29,6 +29,7 @@ export MOLE_TEST_NO_AUTH=1
 unset NO_COLOR
 
 TEST_SYSTEM_STUB_DIR="$(mktemp -d "${TMPDIR:-/tmp}/mole-test-stubs.XXXXXX")"
+TEST_SYSTEM_STUB_DIR="$(cd -P "$TEST_SYSTEM_STUB_DIR" && pwd -P)"
 TEST_GO_HELPER_DIR=""
 # shellcheck disable=SC2329  # Invoked by trap.
 cleanup_test_stubs() {
@@ -36,8 +37,33 @@ cleanup_test_stubs() {
     if [[ -n "$TEST_GO_HELPER_DIR" ]]; then
         rm -rf "$TEST_GO_HELPER_DIR" # SAFE: exact mktemp-created Go helper directory
     fi
+    prune_test_launchservices || true
+}
+
+# Spotlight indexes tests/tmp-* within seconds and registers every fixture
+# .app with LaunchServices; deleting the fixture leaves the record behind.
+# Thousands of dead records slow every `lsregister -dump`, which Mole Mac's
+# uninstall reads (66,532 of them made each read take 36 to 56 s,
+# 2026-10-26). Unregister only records under tests/ whose bundle is gone.
+# shellcheck disable=SC2329  # Invoked by cleanup_test_stubs.
+prune_test_launchservices() {
+    local lsregister="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+    [[ -x "$lsregister" ]] || return 0
+    "$lsregister" -dump Bundle 2> /dev/null |
+        sed -n -E 's/^path: +(.*) \(0x[0-9a-f]+\)$/\1/p' |
+        while IFS= read -r path; do
+            [[ "$path" == "$PROJECT_ROOT/tests/"* ]] || continue
+            [[ -e "$path" || -L "$path" ]] || printf '%s\0' "$path"
+        done |
+        xargs -0 -n 200 "$lsregister" -u > /dev/null 2>&1
 }
 trap cleanup_test_stubs EXIT
+
+# Module-loading and installation probes run outside the Bats helper too.
+# Keep their temp registries and stale-temp pruning inside this owned tree.
+mkdir -p "$TEST_SYSTEM_STUB_DIR/tmp"
+export TMPDIR="$TEST_SYSTEM_STUB_DIR/tmp"
+unset MOLE_RESOLVED_TMPDIR MOLE_TEMP_REGISTRY_FILE
 
 cat > "$TEST_SYSTEM_STUB_DIR/sudo" << 'EOF'
 #!/bin/bash
@@ -359,11 +385,15 @@ echo ""
 echo "3. Running Go tests..."
 if command -v go > /dev/null 2>&1; then
     mkdir -p "$GO_TEST_CACHE"
-    if GOCACHE="$GO_TEST_CACHE" go build ./... > /dev/null 2>&1 &&
-        GOCACHE="$GO_TEST_CACHE" go vet ./... > /dev/null 2>&1 &&
-        GOCACHE="$GO_TEST_CACHE" go test ./... > /dev/null 2>&1; then
+    # Kept quiet on success; on failure the output names the failing test,
+    # which CI otherwise never shows (a CI-only Go failure on #1839).
+    go_test_log="$TEST_SYSTEM_STUB_DIR/go-test.log"
+    if GOCACHE="$GO_TEST_CACHE" go build ./... > "$go_test_log" 2>&1 &&
+        GOCACHE="$GO_TEST_CACHE" go vet ./... >> "$go_test_log" 2>&1 &&
+        GOCACHE="$GO_TEST_CACHE" go test ./... >> "$go_test_log" 2>&1; then
         printf '%b' "${GREEN}${ICON_SUCCESS} Go tests passed${NC}\n"
     else
+        cat "$go_test_log"
         printf '%b' "${RED}${ICON_ERROR} Go tests failed${NC}\n"
         FAILED=$((FAILED + 1))
     fi

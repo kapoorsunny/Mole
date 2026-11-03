@@ -350,7 +350,8 @@ func isProtectedAnalyzeDeletePath(path string) bool {
 		if cleanPath == dockerDesktopState || strings.HasPrefix(cleanPath, dockerDesktopState+string(filepath.Separator)) {
 			return true
 		}
-		if isPathWithinExistingRoot(cleanPath, dockerDesktopState) {
+		if isPathWithinExistingRoot(cleanPath, dockerDesktopState) ||
+			containsProtectedRoot(cleanPath, dockerDesktopState) {
 			return true
 		}
 
@@ -358,7 +359,12 @@ func isProtectedAnalyzeDeletePath(path string) bool {
 		if cleanPath == orbstackState || strings.HasPrefix(cleanPath, orbstackState+string(filepath.Separator)) {
 			return true
 		}
-		if isPathWithinExistingRoot(cleanPath, orbstackState) {
+		if isPathWithinExistingRoot(cleanPath, orbstackState) ||
+			containsProtectedRoot(cleanPath, orbstackState) {
+			return true
+		}
+
+		if isICloudStructuralPath(cleanPath, homeRoot) {
 			return true
 		}
 
@@ -368,7 +374,9 @@ func isProtectedAnalyzeDeletePath(path string) bool {
 				if !strings.HasSuffix(strings.ToLower(entry.Name()), "dev.orbstack") {
 					continue
 				}
-				if isPathWithinExistingRoot(cleanPath, filepath.Join(groupContainers, entry.Name())) {
+				stateRoot := filepath.Join(groupContainers, entry.Name())
+				if isPathWithinExistingRoot(cleanPath, stateRoot) ||
+					containsProtectedRoot(cleanPath, stateRoot) {
 					return true
 				}
 			}
@@ -467,6 +475,60 @@ func isCriticalAnalyzeDeletePath(path string) bool {
 	return false
 }
 
+// isICloudStructuralPath reports iCloud Drive's own folders: Mobile Documents,
+// each app container in it (com~apple~CloudDocs is iCloud Drive itself) and a
+// container's Documents folder. Trashing one of them removes that whole store
+// from every device signed in to the account. Files and folders inside them
+// stay the user's to remove, as Mole Mac's Analyze allows inside an app's
+// Documents.
+func isICloudStructuralPath(path, homeRoot string) bool {
+	mobileDocuments := filepath.Join(homeRoot, "Library", "Mobile Documents")
+	// A recursive move of an existing ancestor includes the same protected
+	// stores. Keep absent-state Library folders eligible, as with runtimes.
+	if containsProtectedRoot(path, mobileDocuments) {
+		return true
+	}
+	// These are directory boundaries, not reserved names for ordinary files.
+	// Unknown metadata keeps the conservative lexical/identity policy below.
+	if info, err := os.Stat(path); err == nil && !info.IsDir() {
+		return false
+	}
+	rel, err := filepath.Rel(strings.ToLower(mobileDocuments), strings.ToLower(path))
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return isICloudStructuralByIdentity(path, mobileDocuments)
+	}
+	if rel == "." {
+		return true
+	}
+	parts := strings.Split(rel, string(filepath.Separator))
+	switch len(parts) {
+	case 1:
+		return true
+	case 2:
+		return parts[1] == "documents"
+	}
+	return false
+}
+
+// isICloudStructuralByIdentity applies the same depth rule when the path names
+// Mobile Documents another way (/System/Volumes/Data/Users/..., a symlinked
+// parent): it compares the path and its two parents with the real folder by
+// file identity.
+func isICloudStructuralByIdentity(path, mobileDocuments string) bool {
+	if _, err := os.Stat(mobileDocuments); err != nil {
+		return false
+	}
+	if isSameExistingPath(path, mobileDocuments) {
+		return true
+	}
+	parent := filepath.Dir(path)
+	if isSameExistingPath(parent, mobileDocuments) {
+		return true
+	}
+	return strings.EqualFold(filepath.Base(path), "Documents") &&
+		isSameExistingPath(filepath.Dir(parent), mobileDocuments)
+}
+
 func protectedAnalyzeHomeRoots() []string {
 	var homeRoots []string
 	seenHomeRoots := make(map[string]bool)
@@ -490,6 +552,19 @@ func protectedAnalyzeHomeRoots() []string {
 		addHomeRoot(currentUser.HomeDir)
 	}
 	return homeRoots
+}
+
+func containsProtectedRoot(path, protectedRoot string) bool {
+	// An absent runtime must not make an otherwise empty container directory
+	// undeletable. Unknown visibility still keeps its structural ancestors.
+	if _, err := os.Lstat(protectedRoot); os.IsNotExist(err) {
+		return false
+	}
+	if resolved, err := filepath.EvalSymlinks(protectedRoot); err == nil &&
+		isPathWithinExistingRoot(resolved, path) {
+		return true
+	}
+	return isPathWithinExistingRoot(protectedRoot, path)
 }
 
 func isPathWithinExistingRoot(path, protectedRoot string) bool {
@@ -547,6 +622,13 @@ func isEndpointSecurityCachePath(path string) bool {
 	lowerPath := strings.ToLower(path)
 	if !strings.HasPrefix(lowerPath, "/private/var/folders/") && !strings.HasPrefix(lowerPath, "/var/folders/") {
 		return false
+	}
+	// A whole Darwin user/cache container also moves any protected agent
+	// below it. Keep the structural ancestors; ordinary app cache leaves stay
+	// eligible without an unbounded recursive scan of the shared container.
+	rel := strings.TrimPrefix(strings.TrimPrefix(lowerPath, "/private"), "/var/folders/")
+	if len(strings.Split(rel, string(filepath.Separator))) <= 3 {
+		return true
 	}
 	for _, prefix := range endpointSecurityBundlePrefixes {
 		if strings.Contains(lowerPath, prefix) {

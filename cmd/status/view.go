@@ -11,6 +11,16 @@ import (
 	"github.com/tw93/mole/internal/units"
 )
 
+// Keep the fallback within both dimensions so the renderer cannot clip away
+// its explanation. A later resize recomputes the dashboard from the model.
+func renderTerminalTooSmall(width, height int) string {
+	return lipgloss.NewStyle().
+		Width(width).
+		MaxWidth(width).
+		MaxHeight(height).
+		Render("Terminal too small. Enlarge the window to view status.")
+}
+
 var (
 	titleStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#C79FD7")).Bold(true)
 	subtleStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#737373"))
@@ -544,6 +554,14 @@ func formatDiskLine(label string, d DiskStatus) string {
 	if d.Total > d.Used {
 		free = d.Total - d.Used
 	}
+	// Finder's corrected used value includes purgeable APFS space in the
+	// corresponding free value. Keep the main status line for immediately
+	// free space; the meta line below reports purgeable space separately.
+	if free > d.Purgeable {
+		free -= d.Purgeable
+	} else {
+		free = 0
+	}
 	return fmt.Sprintf("%-6s %s  %s used, %s free", label, bar, used, humanBytesShort(free))
 }
 
@@ -724,6 +742,15 @@ func renderNetworkCard(netStats []NetworkStatus, history NetworkHistory, proxy P
 	totalRx, totalTx := networkTotals(netStats)
 	var primaryIP string
 
+	// The routed physical interface owns the IP line, so Ethernet and USB
+	// adapters show theirs. A routed tunnel's address is not the Mac's LAN IP,
+	// and an unknown route keeps the en0 fallback.
+	for _, n := range netStats {
+		if n.IP != "" && n.defaultRoute && !n.defaultTunnel {
+			primaryIP = n.IP
+			break
+		}
+	}
 	for _, n := range netStats {
 		if primaryIP == "" && n.IP != "" && n.Name == "en0" {
 			primaryIP = n.IP
@@ -874,18 +901,17 @@ func renderBatteryCard(batts []BatteryStatus, thermal ThermalStatus, probed bool
 				healthParts = append(healthParts, dangerStyle.Render(label))
 			case "warn":
 				healthParts = append(healthParts, warnStyle.Render(label))
-			default:
+			case "ok":
 				healthParts = append(healthParts, okStyle.Render(label))
 			}
-		} else if b.Health != "" {
+		}
+		if len(healthParts) == 0 && b.Health != "" {
 			healthParts = append(healthParts, b.Health)
 		}
 
 		if b.CycleCount > 0 {
 			cycleText := fmt.Sprintf("%d cycles", b.CycleCount)
-			if b.CycleCount > batteryCycleDanger {
-				cycleText = dangerStyle.Render(cycleText)
-			} else if b.CycleCount > batteryCycleWarn {
+			if b.CycleCount > batteryCycleWarn {
 				cycleText = warnStyle.Render(cycleText)
 			}
 			healthParts = append(healthParts, cycleText)

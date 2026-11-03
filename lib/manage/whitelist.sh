@@ -138,9 +138,9 @@ pip Python package cache|$HOME/Library/Caches/pip/*|package_manager
 uv Python package cache|$HOME/.cache/uv/*|package_manager
 tealdeer tldr pages cache|$HOME/Library/Caches/tealdeer/tldr-pages|package_manager
 Homebrew downloaded packages|$HOME/Library/Caches/Homebrew/*|package_manager
-Yarn package manager cache|$HOME/.yarn/cache/*|package_manager
 Yarn v1 package cache|$HOME/Library/Caches/Yarn/*|package_manager
 pnpm package store|$HOME/Library/pnpm/store/*|package_manager
+Bun package cache|$HOME/.bun/install/cache/*|package_manager
 Composer PHP dependencies cache (legacy)|$HOME/.composer/cache/*|package_manager
 Composer PHP dependencies cache|$HOME/Library/Caches/composer/*|package_manager
 RubyGems package cache|$HOME/.gem/ruby/*/cache/*.gem|package_manager
@@ -231,7 +231,7 @@ load_whitelist() {
     fi
 
     if [[ $config_state -eq 0 ]]; then
-        while IFS= read -r line; do
+        while IFS= read -r line || [[ -n "$line" ]]; do
             # shellcheck disable=SC2295
             line="${line#"${line%%[![:space:]]*}"}"
             # shellcheck disable=SC2295

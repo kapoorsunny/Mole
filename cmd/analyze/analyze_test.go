@@ -489,7 +489,7 @@ func TestViewDeleteConfirmShowsUninstallHintForAppBundle(t *testing.T) {
 	if !strings.Contains(view, "mo uninstall Safari") {
 		t.Fatalf("expected app-specific uninstall command, got:\n%s", view)
 	}
-	if !strings.Contains(view, "bundle only") {
+	if !strings.Contains(view, "only the bundle moves to Trash") {
 		t.Fatalf("expected bundle-only warning, got:\n%s", view)
 	}
 }
@@ -3466,7 +3466,7 @@ func TestDeleteViewHidesZeroTally(t *testing.T) {
 	if strings.Contains(view, "0 items") {
 		t.Fatalf("expected no zero tally while nothing has completed, got:\n%s", view)
 	}
-	if !strings.Contains(view, "moving to Trash") {
+	if !strings.Contains(view, "Moving to Trash") {
 		t.Fatalf("expected a progress line while deleting, got:\n%s", view)
 	}
 
@@ -3517,7 +3517,7 @@ func TestDeleteProgressPartialFailureRemovesSucceededPathsAndRefreshes(t *testin
 	if got.totalSize != 20 {
 		t.Fatalf("expected successful removal to update total size, got %d", got.totalSize)
 	}
-	if !strings.Contains(got.status, "Deleted 1 items; some failed") {
+	if !strings.Contains(got.status, "Moved 1 items to Trash, some failed") {
 		t.Fatalf("expected partial-failure status, got %q", got.status)
 	}
 	if entry := got.cache[parent]; !entry.NeedsRefresh {
@@ -5057,9 +5057,16 @@ func TestLiveScanCurrentRequestCompletes(t *testing.T) {
 	}
 	next, _ = m.Update(wait())
 	got := next.(model)
+	defer got.cancelBackgroundCacheWrites(nil)
 	if got.scanning || got.liveScanID != 0 {
 		t.Fatalf("empty directory did not complete: scanning=%v id=%d", got.scanning, got.liveScanID)
 	}
+	// Completion publishes the model before its cache writer finishes. Wait
+	// for that writer's final rename before TempDir removes its directory.
+	waitForTestCondition(t, "completed empty listing to reach disk cache", func() bool {
+		_, err := loadCacheFromDisk(got.path)
+		return err == nil
+	})
 }
 
 func TestLiveScanVariantsRejectSupersededStart(t *testing.T) {

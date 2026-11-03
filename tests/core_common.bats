@@ -849,6 +849,47 @@ EOF
     [ "$result" = "not-protected" ]
 }
 
+@test "protected bundle alternation matches exactly what each pattern matches alone" {
+    run env HOME="$HOME" /bin/bash --noprofile --norc <<'EOF2'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+patterns=("${SYSTEM_CRITICAL_BUNDLES[@]}" "${DATA_PROTECTED_BUNDLES[@]}")
+# An entry with | ( or ) would change the meaning of the @(a|b|...) alternation.
+for pattern in "${patterns[@]}"; do
+    [[ -n "$pattern" && "$pattern" != *[\|\(\)]* ]] || { echo "bad entry: $pattern"; exit 1; }
+done
+probes=("$HOME/Library/Caches/com.example.app" "plain" "日本語IME" "$HOME/Library/Caches/Écrivain/1Password/x")
+for pattern in "${patterns[@]}"; do
+    literal="${pattern//\*/X}"
+    probes+=("$literal" "/p/$literal/q" "${pattern//\*/}")
+done
+for probe in "${probes[@]}"; do
+    expected=1
+    for pattern in "${patterns[@]}"; do
+        # shellcheck disable=SC2053 # unquoted RHS is the glob under test
+        if [[ "$probe" == $pattern ]]; then expected=0; break; fi
+    done
+    actual=1
+    _mole_matches_protected_glob "$probe" "$_MOLE_CLEAN_PROTECTED_GLOB" && actual=0
+    [[ "$actual" == "$expected" ]] || { echo "mismatch: $probe"; exit 1; }
+done
+# A caller with nocasematch keeps its locale's case folding: U+212A, the
+# Kelvin sign, folds to k only in a UTF-8 locale, so org.<U+212A>eepassxc
+# still matches org.keepassxc.* as it did with the per-pattern loop.
+export LC_ALL=en_US.UTF-8
+kelvin_id=$(printf 'org.\xe2\x84\xaaeepassxc.any')
+shopt -s nocasematch
+should_protect_data "$kelvin_id" || { echo "nocasematch lost Unicode folding"; exit 1; }
+shopt -u nocasematch
+# The C locale used for the match stays inside the helper.
+should_protect_data "plain" || true
+[[ "$LC_ALL" == "en_US.UTF-8" ]] || { echo "caller locale changed"; exit 1; }
+echo ok
+EOF2
+    [ "$status" -eq 0 ]
+    [ "$output" = "ok" ]
+}
+
 # Regression: CUPS prefs have a bundle-ID-style name but no parent .app,
 # so the orphan sweep deleted them and users lost their default printer
 # and recent-printer list. See #731.
@@ -1081,23 +1122,28 @@ EOF
 
     local raw="$HOME/spinner-progress.raw"
     # shellcheck disable=SC2016  # inner bash expands these from its environment
-    PROJECT_ROOT="$PROJECT_ROOT" HOME="$HOME" TERM=xterm-256color \
-        /usr/bin/script -q "$raw" /bin/bash --noprofile --norc -c '
+    # A loaded macos-26 runner drew only the first frame within a fixed 0.2s
+    # wait (capture: "0/10" once, then PID_STABLE), so wait for the redraw in
+    # the flushed capture instead of sleeping a guessed interval.
+    PROJECT_ROOT="$PROJECT_ROOT" HOME="$HOME" TERM=xterm-256color RAW="$raw" \
+        /usr/bin/script -q -F "$raw" /bin/bash --noprofile --norc -c '
             source "$PROJECT_ROOT/lib/core/common.sh"
             start_section_spinner "Scanning items... 0/10"
             pid_before="$INLINE_SPINNER_PID"
             last_tick=0
             update_progress_if_needed 5 10 last_tick 1
             pid_after="$INLINE_SPINNER_PID"
-            /bin/sleep 0.2
+            for _ in $(/usr/bin/seq 50); do
+                /usr/bin/grep -q "Scanning items... 5/10" "$RAW" 2> /dev/null && break
+                /bin/sleep 0.1
+            done
             stop_inline_spinner
             [[ "$pid_before" == "$pid_after" && -n "$pid_before" ]] && echo "PID_STABLE"
         ' < /dev/null > /dev/null 2>&1
 
     raw_content="$(cat "$raw")"
-    # This case failed once on a CI runner and could not be reproduced in
-    # about 70 local runs; print the PTY capture so the next failure explains
-    # itself instead of being retuned blind.
+    # Print the PTY capture so a failure explains itself instead of being
+    # retuned blind.
     [[ "$raw_content" == *"Scanning items... 5/10"* ]] || { cat -v "$raw"; return 1; }
     [[ "$raw_content" == *"PID_STABLE"* ]] || { cat -v "$raw"; return 1; }
 }
@@ -1474,4 +1520,103 @@ fi
 EOF
 
     [[ "$status" -eq 0 ]] || { echo "$output"; return 1; }
+}
+
+@test "has_full_disk_access reports denied when protected paths exist but cannot be read" {
+    mkdir -p "$HOME/Library/Mail/V10" "$HOME/Library/Messages"
+    : > "$HOME/Library/Messages/chat.db"
+    chmod 000 "$HOME/Library/Mail/V10" "$HOME/Library/Messages/chat.db"
+
+    run env HOME="$HOME" /bin/bash --noprofile --norc -c "
+source '$PROJECT_ROOT/lib/core/common.sh'
+unset MOLE_HAS_FDA
+rc=0
+has_full_disk_access || rc=\$?
+printf '%s:%s\n' \"\$rc\" \"\$MOLE_HAS_FDA\"
+"
+    chmod 755 "$HOME/Library/Mail/V10"
+    chmod 644 "$HOME/Library/Messages/chat.db"
+    rm -rf "$HOME/Library"
+
+    # stat succeeds on a TCC-protected path without Full Disk Access, so only
+    # listing a folder or opening a file proves the terminal can read it.
+    [ "$output" = "1:0" ]
+}
+
+@test "has_full_disk_access reports granted when a protected path can be read" {
+    mkdir -p "$HOME/Library/Mail/V10"
+
+    run env HOME="$HOME" /bin/bash --noprofile --norc -c "
+source '$PROJECT_ROOT/lib/core/common.sh'
+unset MOLE_HAS_FDA
+rc=0
+has_full_disk_access || rc=\$?
+printf '%s:%s\n' \"\$rc\" \"\$MOLE_HAS_FDA\"
+"
+    rm -rf "$HOME/Library"
+
+    [ "$output" = "0:1" ]
+}
+
+@test "has_full_disk_access reports unknown when no protected path exists" {
+    rm -rf "$HOME/Library"
+
+    run env HOME="$HOME" /bin/bash --noprofile --norc -c "
+source '$PROJECT_ROOT/lib/core/common.sh'
+unset MOLE_HAS_FDA
+rc=0
+has_full_disk_access || rc=\$?
+printf '%s:%s\n' \"\$rc\" \"\$MOLE_HAS_FDA\"
+"
+
+    [ "$output" = "2:unknown" ]
+}
+
+@test "mole_count_label keeps one item singular" {
+    # shellcheck disable=SC2016  # inner bash expands these from its environment
+    run env PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc -c '
+        source "$PROJECT_ROOT/lib/core/base.sh"
+        printf "%s|%s|%s\n" "$(mole_count_label 1 dir)" "$(mole_count_label 0 item)" "$(mole_count_label 12 item)"
+    '
+    [ "$status" -eq 0 ] || return 1
+    [ "$output" = "1 dir|0 items|12 items" ]
+}
+
+@test "mole_applescript_escape leaves no bare quote or trailing backslash in an AppleScript literal" {
+    cat > "$HOME/escape_probe.sh" << 'PROBE'
+source "$1/lib/core/base.sh"
+bad=0
+samples=('plain' 'a"b' 'a\b' 'x\"; do shell script "id"' $'two\nlines' 'ends\' '')
+for sample in "${samples[@]}"; do
+    mole_applescript_escape out "$sample"
+    # Drop every escaped pair; a surviving quote or backslash would end the literal early.
+    rest=${out//\\\\/}
+    rest=${rest//\\\"/}
+    case "$rest" in
+        *'"'* | *'\'*)
+            bad=1
+            printf 'unsafe: %s\n' "$out"
+            ;;
+    esac
+done
+mole_applescript_escape out 'a"b\c'
+[[ "$out" == 'a\"b\\c' ]] || {
+    bad=1
+    printf 'wrong: %s\n' "$out"
+}
+exit "$bad"
+PROBE
+    run /bin/bash --noprofile --norc "$HOME/escape_probe.sh" "$PROJECT_ROOT"
+    echo "$output"
+    [ "$status" -eq 0 ]
+}
+
+@test "AppleScript string literals built from bundle names use mole_applescript_escape" {
+    for f in lib/core/sudo.sh lib/core/app_protection.sh lib/uninstall/batch.sh; do
+        run grep -c '^[^#]*mole_applescript_escape ' "$PROJECT_ROOT/$f"
+        [ "$status" -eq 0 ]
+        [ "$output" -ge 1 ]
+        run grep -nE '^[^#]*\$\{[a-z_]+//\\\\"/' "$PROJECT_ROOT/$f"
+        [ "$status" -ne 0 ]
+    done
 }
