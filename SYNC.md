@@ -144,7 +144,7 @@ Implemented in source (Mole CLI (macOS), `main`, `2335f055`, tw93/Mole#1914): `u
 
 Implemented in source (Mole CLI (macOS), `main`, `a08c6885`, tw93/Mole#1916): Synology Active Backup, Carbon Copy Cloner and similar tools leave APFS snapshots on the data volume that pin deleted files like Time Machine ones, and Mole counted only `com.apple.TimeMachine.<date>` names and probed only with Time Machine configured. `mo clean` now prints a read-only `APFS snapshots` row (count plus owner prefix) from `tmutil listlocalsnapshots /` whether or not Time Machine is set up, through `mole_local_snapshot_rows` in `lib/clean/snapshots.sh`; `mo analyze` counts the same names. Apple's other `com.apple.*` snapshots stay out, and nothing is sized or deleted. Not released until the next tagged version ships it.
 
-- Mole Mac: Pending. `PurgeableSpaceManager.snapshotCount` (`MoleApp/Sources/Services/System/PurgeableSpaceManager.swift`, read at `d9d4f4dde`) counts only `com.apple.TimeMachine` lines, and its row removes snapshots with `tmutil deletelocalsnapshots /`, which must not reach a backup app's snapshot. Next check: decide whether Mole Mac shows a separate report-only row for non-Apple names, kept apart from the Time Machine delete path.
+- Mole Mac: Implemented (`11ad35c68`). One read-only row names the owners, with no size and no delete; `PurgeableSpaceManager.snapshotCount` and `tmutil deletelocalsnapshots /` stay Time Machine's alone.
 - Mole CLI (Windows): Not applicable. Windows has no APFS snapshots; Volume Shadow Copies are a different mechanism and are not in scope.
 - Mole for Windows: Not applicable, for the same reason.
 
@@ -187,6 +187,17 @@ Implemented in source (Mole CLI (macOS), `main`): `4075102a` (Docker, I-38) and 
 - Mole Mac: Not applicable for the endpoint gate and the daemon prune, since it never runs `docker` and a CLI owner command does not transfer by itself. Implemented in source (2026-11-06) for the running-app check: folders named `Code`, `Docker Desktop` and `t3code-v2` already answered to their running apps, and an Application Support folder that matches no running app is now held while the process its `SingletonLock` names is alive. The app-owned record owns the comparison.
 - Mole CLI (Windows): Not applicable. It never runs `docker`: `Clear-DockerCaches` keeps the build cache, and the running-app check is `Clear-MoleAppCache`'s named owners.
 - Mole for Windows: Not applicable. It never runs `docker`; its one Docker row is Docker Desktop's log folder, and every cache rule names its owner process.
+
+## 2026-11-08 Purge configuration that cannot be read
+
+Source: PR #1947. `mo purge` stops with a cause and a next action when `purge_paths` exists but cannot be read, is a broken link or link loop, or is a directory, instead of treating it as missing and replacing the user's scope with discovered roots.
+
+Released (Mole CLI (macOS), `V1.70.0`): `ae5a6eb5` and `57f2f633`, merged in `7efe3e40`; `402ef6f5` keeps the shell error out of `mo clean`.
+
+- Mole CLI (Windows): Released in `V1.43.0-windows`, recorded in its `SYNC.md`. It never rewrote the file; it silently scanned the default paths.
+- Mole CLI (Linux): Implemented before this entry and Released in `V0.5.0-linux`. `lib/purge/scan.sh` already returns a refusal for an unreadable file.
+- Mole Mac: Not applicable. It has no purge paths file.
+- Mole for Windows: Not applicable. It has no purge paths file.
 
 ## 2026-11-07 Purge editor commands
 
