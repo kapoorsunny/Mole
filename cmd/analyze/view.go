@@ -232,7 +232,7 @@ func (m model) View() string {
 					sizeVal := entry.Size
 					// Hide entries that have been scanned and are empty (standard dirs
 					// are never 0 bytes; only insight dirs in unused tool paths are).
-					if sizeVal == 0 && entry.State == scanComplete {
+					if entry.hiddenWhenEmpty() {
 						continue
 					}
 					barValue := max(sizeVal, 0)
@@ -258,7 +258,7 @@ func (m model) View() string {
 						}
 					}
 					entryPrefix := "   "
-					name := trimNameWithWidth(entry.Name, nameWidth)
+					name := truncateMiddle(entry.Name, nameWidth)
 					paddedName := padName(name, nameWidth)
 					nameSegment := paddedName
 					numColor := ""
@@ -305,7 +305,7 @@ func (m model) View() string {
 					if entry.IsDir {
 						icon = "📁"
 					}
-					name := trimNameWithWidth(entry.Name, nameWidth)
+					name := truncateMiddle(entry.Name, nameWidth)
 					paddedName := padName(name, nameWidth)
 
 					sizeValue := max(entry.Size, 0)

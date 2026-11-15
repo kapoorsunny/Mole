@@ -43,6 +43,21 @@ type scanFailures struct {
 // PATH rejects -I outright. A var only so tests can point it at a stub.
 var duBinary = "/usr/bin/du"
 
+var (
+	// duTimeout bounds one du while a scan lists a folder, where a slow child
+	// can fall back to a partial size without holding the listing up. It also
+	// bounds an overview row in --json, which prints nothing until every row
+	// lands and whose callers often have shorter tool timeouts of their own.
+	duTimeout = 30 * time.Second
+	// overviewDuTimeout bounds an overview row. It has no fallback after its
+	// deadline and shows a spinner meanwhile, so a normal walk of a large
+	// ~/Library must finish rather than read as unknown (#1956).
+	overviewDuTimeout = 5 * time.Minute
+
+	// activeDu counts running du children so quitting can wait for their kill.
+	activeDu atomic.Int64
+)
+
 func (f *scanFailures) record(err error) {
 	if err != nil {
 		f.once.Do(func() { f.first = err })
@@ -241,10 +256,6 @@ func getDirectorySizeFromDuWithLimiter(ctx context.Context, path string, limiter
 	return getDirectorySizeFromDu(ctx, path)
 }
 
-func scanPathConcurrent(ctx context.Context, root string, filesScanned, dirsScanned, bytesScanned *int64, currentPath *atomic.Value) (scanResult, error) {
-	return scanPathConcurrentWithOptions(ctx, root, filesScanned, dirsScanned, bytesScanned, currentPath, true, maxEntries)
-}
-
 func scanPathConcurrentAllEntries(ctx context.Context, root string, filesScanned, dirsScanned, bytesScanned *int64, currentPath *atomic.Value) (scanResult, error) {
 	return scanPathConcurrentWithOptions(ctx, root, filesScanned, dirsScanned, bytesScanned, currentPath, true, 0)
 }
@@ -355,6 +366,7 @@ func scanPathConcurrentWithLimiter(ctx context.Context, root string, filesScanne
 	isRootDir := root == "/"
 	home := os.Getenv("HOME")
 	isHomeDir := home != "" && root == home
+	rootDevice := scanDeviceOf(root)
 
 scanChildren:
 	for _, child := range children {
@@ -398,6 +410,21 @@ scanChildren:
 
 			// Skip system dirs at root.
 			if isRootDir && skipSystemDirs[child.Name()] {
+				continue
+			}
+
+			// A mount point stays a browsable row, but its volume is not
+			// part of this directory's size.
+			if rootDevice.isMountPoint(fullPath, child) {
+				atomic.AddInt64(dirsScanned, 1)
+				trySend(ctx, entryChan, dirEntry{
+					Name:    child.Name(),
+					Path:    fullPath,
+					Size:    0,
+					State:   scanComplete,
+					IsDir:   true,
+					IsMount: true,
+				}, scanSendTimeout)
 				continue
 			}
 
@@ -718,11 +745,7 @@ func shouldSkipFileForLargeTracking(path string) bool {
 	return skipExtensions[ext]
 }
 
-// calculateDirSizeFast performs concurrent dir sizing using os.ReadDir.
-func calculateDirSizeFast(ctx context.Context, root string, filesScanned, dirsScanned, bytesScanned *int64, currentPath *atomic.Value) (int64, error) {
-	return calculateDirSizeFastWithLimiter(ctx, root, newScanLimiter(0), filesScanned, dirsScanned, bytesScanned, currentPath)
-}
-
+// calculateDirSizeFastWithLimiter performs concurrent dir sizing using os.ReadDir.
 func calculateDirSizeFastWithLimiter(ctx context.Context, root string, limiter *scanLimiter, filesScanned, dirsScanned, bytesScanned *int64, currentPath *atomic.Value) (int64, error) {
 	var total atomic.Int64
 	var wg sync.WaitGroup
@@ -731,6 +754,7 @@ func calculateDirSizeFastWithLimiter(ctx context.Context, root string, limiter *
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
+	rootDevice := scanDeviceOf(root)
 	concurrency := min(runtime.NumCPU()*cpuMultiplier, maxWorkers)
 	sem := make(chan struct{}, concurrency)
 	if limiter != nil && limiter.fastSem != nil {
@@ -764,6 +788,9 @@ func calculateDirSizeFastWithLimiter(ctx context.Context, root string, limiter *
 			if entry.IsDir() {
 				subDir := filepath.Join(dirPath, entry.Name())
 				atomic.AddInt64(dirsScanned, 1)
+				if rootDevice.isMountPoint(subDir, entry) {
+					continue
+				}
 
 				select {
 				case sem <- struct{}{}:
@@ -823,6 +850,7 @@ func findLargeFilesWithSpotlight(ctx context.Context, root string, minSize int64
 	if err != nil {
 		return nil, err
 	}
+	rootDevice := scanDeviceOf(root)
 
 	h := &largeFileHeap{}
 	heap.Init(h)
@@ -831,6 +859,8 @@ func findLargeFilesWithSpotlight(ctx context.Context, root string, minSize int64
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
+		// strings.Lines keeps the terminator; a path with it never stats.
+		line = strings.TrimSuffix(line, "\n")
 		if line == "" {
 			continue
 		}
@@ -851,6 +881,11 @@ func findLargeFilesWithSpotlight(ctx context.Context, root string, minSize int64
 		}
 
 		if info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			continue
+		}
+
+		// mdfind -onlyin crosses mount points; the walk does not (#1979).
+		if rootDevice.isOtherDevice(line, info) {
 			continue
 		}
 
@@ -919,10 +954,10 @@ func measureOverviewSizeWithPublication(ctx context.Context, path string, public
 		excludePath = filepath.Join(home, "Library")
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, duTimeout)
+	ctx, cancel := context.WithTimeout(ctx, overviewDuTimeout)
 	defer cancel()
 	ignoreNames := overviewIgnoreNamesForPath(path)
-	size, err := getDirectorySizeFromDuWithExcludeAndIgnores(ctx, path, excludePath, ignoreNames)
+	size, err := getDirectorySizeFromDuWithExcludeAndIgnores(ctx, path, excludePath, ignoreNames, overviewDuTimeout)
 	if err != nil && size == 0 && ctx.Err() == nil {
 		size, err = getDirectoryLogicalSizeWithExclude(ctx, path, excludePath, ignoreNames)
 	}
@@ -951,7 +986,7 @@ func getDirectorySizeFromDu(ctx context.Context, path string) (int64, error) {
 }
 
 func getDirectorySizeFromDuWithExclude(ctx context.Context, path string, excludePath string) (int64, error) {
-	return getDirectorySizeFromDuWithExcludeAndIgnores(ctx, path, excludePath, nil)
+	return getDirectorySizeFromDuWithExcludeAndIgnores(ctx, path, excludePath, nil, duTimeout)
 }
 
 // duError keeps a short diagnostic separate from paths and the process status.
@@ -991,7 +1026,7 @@ func duDiagnosticReason(stderr []byte) string {
 	return ""
 }
 
-func getDirectorySizeFromDuWithExcludeAndIgnores(ctx context.Context, path string, excludePath string, ignoreNames []string) (int64, error) {
+func getDirectorySizeFromDuWithExcludeAndIgnores(ctx context.Context, path string, excludePath string, ignoreNames []string, timeout time.Duration) (int64, error) {
 	// Validate paths.
 	if err := validatePath(path); err != nil {
 		return 0, err
@@ -1012,7 +1047,7 @@ func getDirectorySizeFromDuWithExcludeAndIgnores(ctx context.Context, path strin
 			return 0, err
 		}
 
-		ctx, cancel := context.WithTimeout(ctx, duTimeout)
+		ctx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
 
 		args := []string{"-skPx"}
@@ -1025,7 +1060,9 @@ func getDirectorySizeFromDuWithExcludeAndIgnores(ctx context.Context, path strin
 		cmd.Stdout = &stdout
 		cmd.Stderr = &stderr
 
+		activeDu.Add(1)
 		runErr := cmd.Run()
+		activeDu.Add(-1)
 		fields := strings.Fields(stdout.String())
 		if ctx.Err() != nil {
 			runErr = ctx.Err()
@@ -1160,6 +1197,11 @@ func getDirectorySizeFromDuSkippingImmediateChild(ctx context.Context, path stri
 		failures.record(err)
 	}
 
+	// du -x stays on the device of its own operand, so a child that is itself
+	// a mount point would be measured as the whole mounted volume. A single
+	// du over path would never enter it; skip it here to match.
+	rootDevice := scanDeviceOf(path)
+
 	var wg sync.WaitGroup
 	workerCount := min(max(runtime.NumCPU()*2, 2), 8)
 	sem := make(chan struct{}, workerCount)
@@ -1181,6 +1223,9 @@ func getDirectorySizeFromDuSkippingImmediateChild(ctx context.Context, path stri
 				continue
 			}
 			atomic.AddInt64(&total, getActualFileSize(fullPath, info))
+			continue
+		}
+		if rootDevice.isMountPoint(fullPath, entry) {
 			continue
 		}
 
@@ -1205,6 +1250,7 @@ func getDirectorySizeFromDuSkippingImmediateChild(ctx context.Context, path stri
 func getDirectoryLogicalSizeWithExclude(ctx context.Context, path string, excludePath string, ignoreNames []string) (int64, error) {
 	var total int64
 	var failures scanFailures
+	rootDevice := scanDeviceOf(path)
 	err := filepath.WalkDir(path, func(p string, d fs.DirEntry, err error) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -1221,6 +1267,9 @@ func getDirectoryLogicalSizeWithExclude(ctx context.Context, path string, exclud
 			return filepath.SkipDir
 		}
 		if d.IsDir() {
+			if p != path && rootDevice.isMountPoint(p, d) {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		info, err := d.Info()
@@ -1287,6 +1336,59 @@ func getActualFileSize(_ string, info fs.FileInfo) int64 {
 		return actualSize
 	}
 	return info.Size()
+}
+
+// fileDevice reports the device that holds a stat result. It is a variable so
+// tests can present a directory as a mount point without attaching a volume.
+var fileDevice = func(_ string, info fs.FileInfo) (uint64, bool) {
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, false
+	}
+	return uint64(stat.Dev), true
+}
+
+// scanDevice is the file system a traversal stays on, like `du -x`. A mounted
+// volume below the scanned path (a simulator runtime, a disk image, a network
+// share) holds data that is not on this disk, so counting it would report
+// space the user cannot reclaim here (#1979). A zero value never matches, so
+// an unreadable root falls back to crossing nothing out.
+type scanDevice struct {
+	dev uint64
+	ok  bool
+}
+
+func scanDeviceOf(root string) scanDevice {
+	info, err := os.Stat(root)
+	if err != nil {
+		return scanDevice{}
+	}
+	dev, ok := fileDevice(root, info)
+	return scanDevice{dev: dev, ok: ok}
+}
+
+// isMountPoint reports whether the directory entry at path lives on another
+// file system than the scan root. An entry whose device cannot be read is
+// treated as local so a stat failure never hides data.
+func (d scanDevice) isMountPoint(path string, entry fs.DirEntry) bool {
+	if !d.ok {
+		return false
+	}
+	info, err := entry.Info()
+	if err != nil {
+		return false
+	}
+	return d.isOtherDevice(path, info)
+}
+
+// isOtherDevice is isMountPoint for a caller that already holds the FileInfo,
+// such as a Spotlight candidate, which can name a file below a mount point.
+func (d scanDevice) isOtherDevice(path string, info fs.FileInfo) bool {
+	if !d.ok {
+		return false
+	}
+	dev, ok := fileDevice(path, info)
+	return ok && dev != d.dev
 }
 
 func getLastAccessTimeFromInfo(info fs.FileInfo) time.Time {
