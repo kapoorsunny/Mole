@@ -55,6 +55,7 @@ check_tcc_permissions() {
         echo -e "${GRAY}You may see ${GREEN}${#tcc_dirs[@]} permission dialogs${NC}${GRAY}, allow each one so these caches can be cleaned.${NC}"
         echo ""
         echo -ne "${PURPLE}${ICON_ARROW}${NC} Press ${GREEN}Enter${NC} to continue: "
+        mole_report_program_status blocked permission
         read -r
         MOLE_SPINNER_PREFIX="" start_inline_spinner "Requesting permissions..."
         # Touch each directory to trigger prompts without deep scanning.
@@ -62,6 +63,7 @@ check_tcc_permissions() {
             [[ -d "$dir" ]] && command find "$dir" -maxdepth 1 -type d > /dev/null 2>&1
         done
         stop_inline_spinner
+        mole_report_program_status working
         echo ""
     fi
     # Mark as granted to avoid repeat prompts.
@@ -734,7 +736,12 @@ _project_cache_final_guard() {
         repo="$MOLE_GIT_REPO_ROOT"
         [[ "$repo" != "$physical" ]] || return 1
         mole_git_path_spec "$repo" "$physical"
-        evidence=$(mole_git_ls_files "$repo" "$git_deadline" "$repo" -- "$MOLE_GIT_PATH_SPEC") || rc=$?
+        # Out here, not in the subshell below, so later guards reuse the answer.
+        mole_git_selected_developer_dir "$git_deadline" || rc=$?
+        [[ $rc -le 128 ]] || return "$rc"
+        if [[ $rc -eq 0 ]]; then
+            evidence=$(mole_git_ls_files "$repo" "$git_deadline" "$repo" -- "$MOLE_GIT_PATH_SPEC") || rc=$?
+        fi
         [[ $rc -le 128 ]] || return "$rc"
         if [[ $rc -ne 0 || -n "$evidence" ]]; then
             debug_log "Keeping project cache after Git recheck: $path (status $rc)"
