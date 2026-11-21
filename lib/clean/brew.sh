@@ -75,7 +75,7 @@ show_brew_cleanup_preview() {
         if [[ "$path" =~ /Cellar/([^/]+)/([^/]+)$ ]]; then
             label="${BASH_REMATCH[1]} ${BASH_REMATCH[2]}"
         else
-            label="${path/#$HOME/~}"
+            label=$(mole_tilde_path "$path")
         fi
         label=$(mole_terminal_safe_text "$label")
         [[ -n "$size" ]] && label+=" · $(mole_terminal_safe_text "$size")"
@@ -409,6 +409,13 @@ clean_homebrew() {
                 echo -e "  ${GREEN}${ICON_SUCCESS}${NC} Homebrew cleanup · $(mole_count_label "${removed_count}" item)"
                 note_activity
             fi
+        fi
+        # Like the Docker prunes, every successful cleanup is logged, with
+        # Homebrew's size when it printed one.
+        if [[ -n "$freed_space" ]]; then
+            log_operation "${MOLE_CURRENT_COMMAND:-clean}" "REMOVED" "brew cleanup" "owner command: $freed_space"
+        else
+            log_operation "${MOLE_CURRENT_COMMAND:-clean}" "REMOVED" "brew cleanup" "owner command"
         fi
     elif mole_rc_timeout "$brew_exit"; then
         echo -e "  ${GRAY}${ICON_WARNING}${NC} Homebrew cleanup timed out · run ${GRAY}brew cleanup${NC} manually"

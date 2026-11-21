@@ -1351,6 +1351,17 @@ EOF
     [ "$output" = $'-n\n-e' ]
 }
 
+@test "truncate_middle_by_display_width keeps the head and the distinguishing tail" {
+    run /bin/bash --noprofile --norc -c '
+        source "$1/lib/core/common.sh"
+        printf "%s|" "$(truncate_middle_by_display_width short 10)" \
+            "$(truncate_middle_by_display_width com.microsoft.VSCode.ShipIt 16)" \
+            "$(LC_ALL=C truncate_middle_by_display_width 微信开发者工具缓存目录 9)"
+    ' _ "$PROJECT_ROOT"
+    [ "$status" -eq 0 ]
+    [ "$output" = "short|com.m…ode.ShipIt|微…存目录|" ]
+}
+
 @test "truncate_by_display_width counts ASCII as one column (#1918)" {
     run /bin/bash -c "export MOLE_BASE_LOADED=1; source '$PROJECT_ROOT/lib/core/ui.sh'; truncate_by_display_width 'abcdefghijklmnop' 10; truncate_by_display_width '中文abcdefghij' 10"
     [ "$status" -eq 0 ]
@@ -1704,4 +1715,32 @@ PROBE
         run grep -nE '^[^#]*\$\{[a-z_]+//\\\\"/' "$PROJECT_ROOT/$f"
         [ "$status" -ne 0 ]
     done
+}
+
+@test "mole_tilde_path abbreviates HOME only at a path boundary" {
+    run /bin/bash --noprofile --norc -c '
+        source "$1/lib/core/base.sh"
+        HOME=/Users/test
+        printf "%s|" "$(mole_tilde_path /Users/test)" "$(mole_tilde_path "/Users/test/a b")" \
+            "$(mole_tilde_path /Users/tester/x)" "$(mole_tilde_path /opt/Users/test)" "$(mole_tilde_path "")"
+        HOME=/Users/test/
+        printf "%s|" "$(mole_tilde_path /Users/test)" "$(mole_tilde_path /Users/test/x)"
+        HOME=""
+        printf "%s|" "$(mole_tilde_path /Applications/Foo.app)" "$(mole_tilde_path "")"
+        HOME=/
+        printf "%s|" "$(mole_tilde_path /Applications/Foo.app)"
+    ' _ "$PROJECT_ROOT"
+    [ "$status" -eq 0 ]
+    [ "$output" = '~|~/a b|/Users/tester/x|/opt/Users/test||~|~/x|/Applications/Foo.app||/Applications/Foo.app|' ]
+}
+
+@test "HOME is shown as ~ through mole_tilde_path, never a string-prefix patsub" {
+    # ${path/#$HOME/~} cuts a sibling such as /Users/tester to ~er, and bash 5.3+
+    # tilde-expands the literal ~ so the replacement does nothing at all.
+    run grep -rnE '^[^#]*/#\$\{?HOME\}?/' "$PROJECT_ROOT/mole" "$PROJECT_ROOT/bin" "$PROJECT_ROOT/lib"
+    [ "$status" -eq 1 ]
+    run grep -rcE '^[^#]*mole_tilde_path "' "$PROJECT_ROOT/bin" "$PROJECT_ROOT/lib"
+    local total=0 count
+    while IFS=: read -r _ count; do total=$((total + count)); done <<< "$output"
+    [ "$total" -ge 20 ]
 }

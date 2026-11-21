@@ -356,6 +356,7 @@ clean_github_cli_cache() {
     if [[ $clear_status -eq 0 ]]; then
         echo -e "  ${GREEN}${ICON_SUCCESS}${NC} GitHub CLI cache"
         note_activity
+        log_operation "${MOLE_CURRENT_COMMAND:-clean}" "REMOVED" "$cache_path" "owner command: GitHub CLI cache"
         return 0
     fi
     if mole_rc_timeout_or_signal "$clear_status"; then
@@ -1183,6 +1184,10 @@ clean_go_cache_root() {
             echo -e "  ${GREEN}${ICON_SUCCESS}${NC} $display_name"
         fi
         note_activity
+        # A dry run ran `go clean -n`, which changes nothing.
+        if [[ "$DRY_RUN" != "true" ]]; then
+            log_operation "${MOLE_CURRENT_COMMAND:-clean}" "REMOVED" "$cache_root" "owner command: $display_name"
+        fi
         if mole_rc_signal "$after_rc"; then
             _mole_record_clean_cancellation "$after_rc" "$display_name"
             return "$after_rc"
@@ -3163,6 +3168,8 @@ clean_dev_mobile() {
                         delete_output=$(_run_simctl "$MOLE_TIMEOUT_PKG_CLEANUP_SEC" delete unavailable 2>&1) || delete_exit_code=$?
 
                         if [[ $delete_exit_code -eq 0 ]]; then
+                            # Record the successful deletion before the recount can be interrupted.
+                            log_operation "${MOLE_CURRENT_COMMAND:-clean}" "REMOVED" "simctl delete unavailable" "owner command"
                             local recount_exit_code=0
                             unavailable_devices_output=$(_run_simctl "$MOLE_TIMEOUT_PKG_LIST_SEC" list devices unavailable 2> /dev/null) || recount_exit_code=$?
                             stop_section_spinner
