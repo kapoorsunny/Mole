@@ -292,8 +292,13 @@ clean_user_essentials() {
             # cleans only after Chrome quits; Android Studio has its own row.
             # Swept whole, it went while Chrome ran and failed every run
             # (seven times in one 2026-10-28 bundle), like Mole Mac's
-            # coveredCachePrefixes.
-            [[ "${user_cache_target##*/}" == "Google" ]] && continue
+            # coveredCachePrefixes. mbx holds a Rust build cache's cargo
+            # shims, scheduler leases and the live target folders checkouts
+            # link into, and evicts to its own size budget; swept whole it
+            # broke builds, so it stays out like Mole Mac's protected root.
+            case "${user_cache_target##*/}" in
+                Google | mbx) continue ;;
+            esac
             case "$deno_cache_root" in
                 "$user_cache_target" | "$user_cache_target"/*) continue ;;
             esac
@@ -2586,6 +2591,10 @@ clean_tart_caches() {
         return 0
     fi
 
+    # The prune already ran, so log it before a signal during the recount
+    # stops the run.
+    log_operation "${MOLE_CURRENT_COMMAND:-clean}" "REMOVED" "$cache_root" "owner command: Tart caches"
+
     local reclaimed_kb=0
     local reclaimed_known=false
     local post_rc=0
@@ -2607,9 +2616,6 @@ clean_tart_caches() {
         echo -e "  ${GREEN}${ICON_SUCCESS}${NC} Tart caches · pruned"
     fi
     note_activity
-    # The prune already ran, so log it before a signal during the recount
-    # stops the run.
-    log_operation "${MOLE_CURRENT_COMMAND:-clean}" "REMOVED" "$cache_root" "owner command: Tart caches"
     if [[ $post_rc -ne 0 ]]; then
         mole_item_size_continues "$post_rc" || return $?
     fi
@@ -2698,24 +2704,6 @@ app_support_dir_has_regenerable_cache_markers() {
         [[ -e "$marker" ]] && return 0
     done
 
-    return 1
-}
-
-# Chromium and Electron apps hold <userData>/SingletonLock, a link to
-# "<host>-<pid>", while they run and remove it when they quit, so a live pid
-# means the Code Cache and GPUCache beside it are in use (Docker Desktop,
-# VS Code, T3 Code). Returns 0 while the app runs or the lock cannot be read,
-# 1 when there is no lock or its pid is gone.
-app_support_dir_in_use() {
-    local lock="$1/SingletonLock"
-    [[ -L "$lock" ]] || return 1
-    local target="" pid=""
-    target=$(readlink "$lock" 2> /dev/null) || return 0
-    pid="${target##*-}"
-    [[ "$pid" =~ ^[0-9]+$ && "$pid" -gt 0 ]] || return 0
-    kill -0 "$pid" 2> /dev/null && return 0
-    # kill -0 also fails for a live process another user owns.
-    ps -p "$pid" > /dev/null 2>&1 && return 0
     return 1
 }
 

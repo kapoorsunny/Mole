@@ -16,7 +16,7 @@
   <img src="./docs/img/big-mole.png" alt="Résultats du nettoyage avec Mole" width="1000" />
 </p>
 
-> 💡 Ce dépôt contient la CLI open source gratuite (`mo`). Vous préférez une app native ? [Mole for Mac](https://mole.fit/) se télécharge séparément : vérification avant suppression, nettoyage des résidus testé sur plus de 800 apps, maintenance, exploration détaillée du disque, état en direct et contrôle des ventilateurs sur les Mac compatibles. Sous Windows, l'app native est [Mole for Windows](https://mole.fit/fr/windows). `brew install mole` installe uniquement la CLI.
+> 💡 Ce dépôt contient la CLI open source gratuite (`mo`). Vous préférez une app native ? [Mole for Mac](https://mole.fit/) se télécharge séparément : vérification avant suppression, nettoyage des résidus testé sur plus de 900 apps, maintenance, exploration détaillée du disque, état en direct et contrôle des ventilateurs sur les Mac compatibles. Sous Windows, l'app native est [Mole for Windows](https://mole.fit/fr/windows). `brew install mole` installe uniquement la CLI.
 
 ## Fonctionnalités
 
@@ -105,7 +105,7 @@ mo analyze /private/tmp      # Examiner les dossiers temporaires sans nettoyage 
 Pour installer une version spécifique, spécifiez un tag depuis la [page des versions](https://github.com/tw93/mole/releases), avec ou sans le `V` initial. Pour suivre la branche de développement, utilisez `main` :
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/tw93/mole/main/install.sh | bash -s -- 1.73.0
+curl -fsSL https://raw.githubusercontent.com/tw93/mole/main/install.sh | bash -s -- 1.74.0
 curl -fsSL https://raw.githubusercontent.com/tw93/mole/main/install.sh | bash -s -- main
 ```
 

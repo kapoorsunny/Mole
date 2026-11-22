@@ -208,6 +208,123 @@ EOF
     rm -rf "$base"
 }
 
+@test "safe_clean neither lists nor removes an item another user owns that this user cannot unlink" {
+    local cache="$HOME/.bundle/cache"
+    mkdir -p "$cache/sub"
+    head -c 40000 /dev/zero > "$cache/rake-13.gem"
+    printf 'x' > "$cache/sub/file"
+    chmod 555 "$cache"
+    rm -f "$HOME/Library/Logs/mole/operations.log"
+
+    local mode
+    for mode in dry real; do
+        run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" MOLE_TEST_MODE=1 MODE="$mode" \
+            /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/bin/clean.sh"
+if [[ "$MODE" == dry ]]; then DRY_RUN=true; export MOLE_DRY_RUN=1; else DRY_RUN=false; export MOLE_DRY_RUN=0; fi
+MOLE_CURRENT_COMMAND=clean
+files_cleaned=0
+total_size_cleaned=0
+total_items=0
+start_section_spinner() { :; }
+stop_section_spinner() { :; }
+start_inline_spinner() { :; }
+stop_inline_spinner() { :; }
+# A fixture cannot be chowned to root without sudo; the cache's entries
+# answer as another user's, the way `sudo bundle` leaves them.
+_mole_path_owned_by_current_user() { [[ "$1" != "$HOME/.bundle/cache/"* && -O "$1" ]]; }
+safe_clean "$HOME"/.bundle/cache/* "Ruby Bundler cache"
+echo "MODE=$MODE FILES=$files_cleaned"
+EOF
+        [ "$status" -eq 0 ] || { chmod 755 "$cache"; echo "$output"; return 1; }
+        [[ "$output" != *"Ruby Bundler cache"* ]] || { chmod 755 "$cache"; echo "$output"; return 1; }
+        [[ "$output" == *"MODE=$mode FILES=0"* ]] || { chmod 755 "$cache"; echo "$output"; return 1; }
+    done
+    chmod 755 "$cache"
+
+    local log="$HOME/Library/Logs/mole/operations.log"
+    [ "$(grep -c 'SKIPPED .*\.bundle/cache/.*(owned by another user)' "$log")" -eq 2 ] || { cat "$log"; return 1; }
+    ! grep -q 'FAILED' "$log" || { cat "$log"; return 1; }
+    [[ -f "$cache/rake-13.gem" && -f "$cache/sub/file" ]] || return 1
+    rm -rf "$HOME/.bundle"
+}
+
+@test "record_dry_run_cleanup_target still records a root-owned item for a sudo sink" {
+    # safe_sudo_remove and safe_sudo_find_delete preview through this recorder
+    # and remove root-owned items themselves; the user-level ownership refusal
+    # must not hide their rows (/Library/Caches is sticky, /private/var/log is
+    # not writable by the user).
+    local logs="$HOME/root-owned-logs"
+    mkdir -p "$logs"
+    printf 'x' > "$logs/install.log"
+    chmod 555 "$logs"
+
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" MOLE_TEST_MODE=1 LOGS="$logs" \
+        /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/bin/clean.sh"
+export MOLE_DRY_RUN=1
+_mole_path_owned_by_current_user() { [[ "$1" != "$LOGS/"* && -O "$1" ]]; }
+register_dry_run_cleanup_target() { :; }
+append_dry_run_cleanup_target() { echo "RECORDED=$1"; }
+_mole_user_sink_refuses_on_ownership "$LOGS/install.log" && echo "USER_SINK_REFUSES"
+record_dry_run_cleanup_target "$LOGS/install.log" 1 1 true
+# The sink itself, past its mutable-ancestor downgrade the way it runs under
+# a root-owned parent such as /private/var/log.
+_mole_privileged_path_has_mutable_ancestor() { return 1; }
+append_dry_run_cleanup_target() { echo "SUDO_SINK_RECORDED=$1"; }
+safe_sudo_remove "$LOGS/install.log" 1
+EOF
+    chmod 755 "$logs"
+    rm -rf "$logs"
+
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"USER_SINK_REFUSES"* ]] || { echo "$output"; return 1; }
+    [[ "$output" == *"RECORDED=$logs/install.log"* ]] || { echo "$output"; return 1; }
+    [[ "$output" == *"SUDO_SINK_RECORDED=$logs/install.log"* ]] || { echo "$output"; return 1; }
+}
+
+@test "safe_clean leaves out of the preview many files another user owns in one folder" {
+    # More than 20 mostly-file paths take the batched sizing branch of
+    # _safe_clean_impl, whose preview asks the ownership refusal on its own.
+    local cache="$HOME/.bundle/cache"
+    mkdir -p "$cache"
+    local i
+    for ((i = 1; i <= 24; i++)); do
+        printf 'x' > "$cache/gem-$i.gem"
+    done
+    chmod 555 "$cache"
+
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" MOLE_TEST_MODE=1 \
+        /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/bin/clean.sh"
+DRY_RUN=true
+export MOLE_DRY_RUN=1
+MOLE_CURRENT_COMMAND=clean
+files_cleaned=0
+total_size_cleaned=0
+total_items=0
+start_section_spinner() { :; }
+stop_section_spinner() { :; }
+start_inline_spinner() { :; }
+stop_inline_spinner() { :; }
+_mole_path_owned_by_current_user() { [[ "$1" != "$HOME/.bundle/cache/"* && -O "$1" ]]; }
+safe_clean "$HOME"/.bundle/cache/* "Ruby Bundler cache"
+echo "FILES=$files_cleaned"
+EOF
+    chmod 755 "$cache"
+    rm -rf "$HOME/.bundle"
+
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" != *"Ruby Bundler cache"* ]] || { echo "$output"; return 1; }
+    [[ "$output" == *"FILES=0"* ]] || { echo "$output"; return 1; }
+}
+
 @test "safe_clean keeps the row when a size could not be read" {
     local base="$HOME/safe_clean_unsized"
     mkdir -p "$base/one" "$base/two"
@@ -1994,17 +2111,27 @@ EOF
     local long_dir="$base/com.example.averyveryverylongvendor.ShipIt"
     mkdir -p "$long_dir"
     printf 'x' > "$long_dir/data"
+    local unicode_dir="$base/Meeting recording 2026-11-21 - release highlights 🎬🚀-preview.mov"
+    local ellipsis_dir="$base/Meeting …🎬🚀-preview.mkv"
+    mkdir -p "$unicode_dir" "$ellipsis_dir"
+    printf 'x\n' > "$unicode_dir/data"
+    printf 'x\n' > "$ellipsis_dir/data"
     local messages="$HOME/safe_clean_progress.log"
     : > "$messages"
 
     # shellcheck disable=SC2016  # inner bash expands these from its environment
-    env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" BASE="$base" MESSAGES="$messages" ESC_DIR="$esc_dir" LONG_DIR="$long_dir" COLUMNS=60 \
+    env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" BASE="$base" MESSAGES="$messages" ESC_DIR="$esc_dir" \
+        LONG_DIR="$long_dir" UNICODE_DIR="$unicode_dir" ELLIPSIS_DIR="$ellipsis_dir" COLUMNS=60 \
         MOLE_TEST_MODE=1 TERM=xterm-256color \
         /usr/bin/script -q /dev/null /bin/bash --noprofile --norc -c '
             source "$PROJECT_ROOT/lib/core/common.sh"
             source "$PROJECT_ROOT/bin/clean.sh"
+            [[ "$(tput cols)" == 60 ]] || exit 1
             DRY_RUN=false
-            start_section_spinner() { printf "%s\n" "$1" >> "$MESSAGES"; }
+            start_section_spinner() {
+                format_spinner_message "$1" >> "$MESSAGES"
+                printf "\n" >> "$MESSAGES"
+            }
             stop_section_spinner() { :; }
             stop_inline_spinner() { :; }
             is_path_whitelisted() { return 1; }
@@ -2020,6 +2147,8 @@ EOF
             safe_clean "$BASE/solo/" "Solo cache"
             safe_clean "$ESC_DIR" "Esc cache"
             safe_clean "$LONG_DIR" "Long cache"
+            safe_clean "$UNICODE_DIR" "Long cache"
+            safe_clean "$ELLIPSIS_DIR" "Long cache"
         ' < /dev/null > /dev/null 2>&1
 
     # No redundant bare "Cleaning..." frame before the named first item.
@@ -2037,6 +2166,9 @@ EOF
     ! grep -q '\.\.\.$' "$messages" || { cat "$messages"; return 1; }
     # A name too long for 60 columns keeps its head and distinguishing tail.
     grep -qxF "Cleaning Long cache 1/1 · com.exam…ongvendor.ShipIt" "$messages" || { cat "$messages"; return 1; }
+    # The real formatter preserves both suffixes, including for a literal ellipsis in the filename.
+    grep -qE "^Cleaning Long cache 1/1 · .*….*-preview[.]mov$" "$messages" || { cat "$messages"; return 1; }
+    grep -qE "^Cleaning Long cache 1/1 · .*….*-preview[.]mkv$" "$messages" || { cat "$messages"; return 1; }
     [[ ! -e "$base/huge" && ! -e "$base/slow" && ! -e "$base/solo" ]] || return 1
     rm -rf "$base" "$messages"
 }

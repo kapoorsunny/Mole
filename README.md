@@ -16,7 +16,7 @@
   <img src="./docs/img/big-mole.png" alt="Mole cleanup results" width="1000" />
 </p>
 
-> 💡 This repo is the free open-source CLI (`mo`). Prefer a native app? [Mole for Mac](https://mole.fit/) is a separate download with review-before-delete cleanup, tested leftovers for 800+ apps, maintenance, disk drill-downs, live status, and fan controls on supported Macs. On Windows, the native app is [Mole for Windows](https://mole.fit/windows). `brew install mole` installs the CLI only.
+> 💡 This repo is the free open-source CLI (`mo`). Prefer a native app? [Mole for Mac](https://mole.fit/) is a separate download with review-before-delete cleanup, tested leftovers for 900+ apps, maintenance, disk drill-downs, live status, and fan controls on supported Macs. On Windows, the native app is [Mole for Windows](https://mole.fit/windows). `brew install mole` installs the CLI only.
 
 ## Features
 
@@ -105,7 +105,7 @@ mo analyze /private/tmp      # Review user-owned temporary directories
 To install a specific release, pass any tag from the [releases page](https://github.com/tw93/mole/releases), with or without its leading `V`. To track the development branch instead, pass `main`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/tw93/mole/main/install.sh | bash -s -- 1.73.0
+curl -fsSL https://raw.githubusercontent.com/tw93/mole/main/install.sh | bash -s -- 1.74.0
 curl -fsSL https://raw.githubusercontent.com/tw93/mole/main/install.sh | bash -s -- main
 ```
 

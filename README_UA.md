@@ -16,7 +16,7 @@
   <img src="./docs/img/big-mole.png" alt="Результати очищення Mole" width="1000" />
 </p>
 
-> 💡 Цей репозиторій містить безкоштовний CLI з відкритим кодом (`mo`). Хочете нативний застосунок? [Mole for Mac](https://mole.fit/) завантажується окремо: перегляд перед видаленням, перевірене прибирання залишків для понад 800 застосунків, обслуговування системи, детальний розбір диска, стан у реальному часі та керування вентиляторами на підтримуваних Mac. Для Windows є нативний застосунок [Mole for Windows](https://mole.fit/windows). `brew install mole` встановлює лише CLI.
+> 💡 Цей репозиторій містить безкоштовний CLI з відкритим кодом (`mo`). Хочете нативний застосунок? [Mole for Mac](https://mole.fit/) завантажується окремо: перегляд перед видаленням, перевірене прибирання залишків для понад 900 застосунків, обслуговування системи, детальний розбір диска, стан у реальному часі та керування вентиляторами на підтримуваних Mac. Для Windows є нативний застосунок [Mole for Windows](https://mole.fit/windows). `brew install mole` встановлює лише CLI.
 
 ## Можливості
 
@@ -105,7 +105,7 @@ mo analyze /private/tmp      # Переглянути тимчасові тек�
 Щоб встановити конкретний реліз, передайте будь-який тег зі [сторінки релізів](https://github.com/tw93/mole/releases), з початковою `V` або без неї. Щоб стежити за гілкою розробки, передайте `main`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/tw93/mole/main/install.sh | bash -s -- 1.73.0
+curl -fsSL https://raw.githubusercontent.com/tw93/mole/main/install.sh | bash -s -- 1.74.0
 curl -fsSL https://raw.githubusercontent.com/tw93/mole/main/install.sh | bash -s -- main
 ```
 

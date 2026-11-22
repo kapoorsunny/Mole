@@ -421,8 +421,23 @@ EOF
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
     [ "$(grep -cFx 'config clear-cache' "$trace")" -eq 1 ] || return 1
     [[ "$output" == *"GitHub CLI cache · stopped (owner cleanup failed)"* ]] || return 1
-    [[ "$output" == *"SAFE:AWS CLI cache"* ]] || return 1
     [[ "$output" == *"SAFE:Google Cloud logs"* ]] || return 1
+}
+
+@test "clean_dev_cloud keeps the AWS CLI credential cache" {
+    run env HOME="$HOME" PATH="/usr/bin:/bin" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/dev.sh"
+DRY_RUN=false
+clean_github_cli_cache() { :; }
+safe_clean() { printf 'SAFE:%s|%s\n' "$1" "${*: -1}"; }
+clean_dev_cloud
+EOF
+
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"SAFE:"*"|Google Cloud logs"* ]] || return 1
+    [[ "$output" != *"/.aws/"* && "$output" != *"AWS CLI"* ]] || return 1
 }
 
 @test "clean_dev_cloud stops on GitHub CLI probe or clear cancellation" {
@@ -5467,6 +5482,57 @@ EOF
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
     [[ "$output" != *UNEXPECTED_LATER* ]] || { echo "$output"; return 1; }
     [[ "$output" == *"RC=130 CANCEL=130"* ]] || { echo "$output"; return 1; }
+}
+
+@test "completed owner cache cleanups stay logged when result sizing is interrupted" {
+    local route description case_home op_log rows
+    local failures=0
+    for route in shared go; do
+        description="Fixture cache"
+        [[ "$route" != go ]] || description="Go build cache"
+        case_home="$BATS_TEST_TMPDIR/$route-after-size"
+        mkdir -p "$case_home/go-build-fixture"
+        run env HOME="$case_home" PROJECT_ROOT="$PROJECT_ROOT" SUDO_USER= \
+            MOLE_TEST_NO_AUTH=1 MOLE_DRY_RUN=0 MO_NO_OPLOG=0 \
+            OWNER_ROUTE="$route" OWNER_DESCRIPTION="$description" /bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/bin/clean.sh"
+[[ "$MOLE_USER_HOME" == "$HOME" && "$DRY_RUN" == false ]] || exit 90
+
+fake_owner_cleanup() {
+    printf 'owner succeeded\n' >> "$HOME/owner.trace"
+    : > "$HOME/owner-complete"
+}
+_run_go_cache_clean_bound() { fake_owner_cleanup; }
+_owner_cache_size_kb() {
+    if [[ -f "$HOME/owner-complete" ]]; then
+        printf 'result sizing started\n' >> "$HOME/owner.trace"
+        # Bash's $$ still names this fixture's clean shell inside $(...).
+        kill -TERM "$$"
+        printf '4\n'
+    else
+        printf '16\n'
+    fi
+}
+if [[ "$OWNER_ROUTE" == go ]]; then
+    clean_go_cache_root "$HOME/go-build-fixture" GOCACHE -cache "$OWNER_DESCRIPTION"
+else
+    clean_tool_cache "$OWNER_DESCRIPTION" "$HOME/go-build-fixture" fake_owner_cleanup
+fi
+EOF
+        [ "$status" -eq 143 ] || { printf '%s exited %s\n%s\n' "$route" "$status" "$output"; return 1; }
+        [[ "$(cat "$case_home/owner.trace")" == $'owner succeeded\nresult sizing started' ]] || return 1
+        op_log="$case_home/Library/Logs/mole/operations.log"
+        rows=0
+        if [[ -f "$op_log" ]]; then
+            rows=$(grep -Fc "REMOVED $case_home/go-build-fixture (owner command: $description)" "$op_log") || true
+        fi
+        if [[ "$rows" -ne 1 ]]; then
+            printf '%s wrote %s REMOVED rows, expected 1\n' "$route" "$rows"
+            failures=1
+        fi
+    done
+    [ "$failures" -eq 0 ]
 }
 
 @test "clean_dev_go stops when measuring a cleaned Go cache is interrupted" {

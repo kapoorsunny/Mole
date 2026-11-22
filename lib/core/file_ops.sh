@@ -900,6 +900,48 @@ _mole_container_cache_has_open_handle() {
     return 1
 }
 
+# Chromium and Electron apps hold <userData>/SingletonLock, a link to
+# "<host>-<pid>", while they run and remove it when they quit, so a live pid
+# means the Code Cache and GPUCache beside it are in use (Docker Desktop,
+# VS Code, T3 Code). Returns 0 while the app runs or the lock cannot be read,
+# 1 when there is no lock or its pid is gone. Lives here, not in a clean
+# module, because both the Application Support sweep and the Service Worker
+# cleaner ask it.
+app_support_dir_in_use() {
+    local lock="$1/SingletonLock"
+    [[ -L "$lock" ]] || return 1
+    local target="" pid=""
+    target=$(readlink "$lock" 2> /dev/null) || return 0
+    pid="${target##*-}"
+    [[ "$pid" =~ ^[0-9]+$ && "$pid" -gt 0 ]] || return 0
+    kill -0 "$pid" 2> /dev/null && return 0
+    # kill -0 also fails for a live process another user owns.
+    ps -p "$pid" > /dev/null 2>&1 && return 0
+    return 1
+}
+
+# A Chromium user-data root sits one to three folders below Application
+# Support (Vivaldi, Google/Chrome, Arc/User Data). Returns 0 while a
+# SingletonLock in any of those folders along the path names a live pid or
+# cannot be read, so a browser's own stores are left alone while it runs
+# (Mole Mac ProcessGuard.singletonLockOwner). Paths elsewhere return 1.
+app_support_path_held_by_singleton() {
+    local support="$HOME/Library/Application Support"
+    local rest="${1%/}"
+    case "$rest" in
+        "$support"/?*) rest="${rest#"$support"/}" ;;
+        *) return 1 ;;
+    esac
+    local folder="$support" depth
+    for depth in 1 2 3; do
+        folder="$folder/${rest%%/*}"
+        app_support_dir_in_use "$folder" && return 0
+        [[ "$rest" == */* ]] || break
+        rest="${rest#*/}"
+    done
+    return 1
+}
+
 # Return 0 when deletion must be refused (live owner or open cache handle).
 _mole_should_refuse_live_user_cache_path() {
     local path="$1"
@@ -1475,6 +1517,31 @@ _mole_note_clean_cancel_source() {
 }
 
 # Safe wrapper around rm -rf with validation
+# This sink is a plain rm as the invoking user. An item another user owns
+# (root's leftovers from `sudo gem`, `sudo npm`, `sudo bundle`) fails there
+# unless this user can still unlink it: its folder is writable and not sticky,
+# and a folder item is itself writable. safe_remove asks before its dry-run
+# return and _safe_clean_impl before recording its preview, so a row the run
+# would refuse on every clean is never listed (Mole Mac
+# CacheScanner.userSinkRefusesOnOwnership). Never ask it for a sudo sink,
+# which removes root-owned items itself.
+# A link is unlinked in its folder whoever owns it, so it is never refused here.
+_mole_path_owned_by_current_user() {
+    [[ -O "$1" ]]
+}
+
+_mole_user_sink_refuses_on_ownership() {
+    local path="$1"
+    [[ ${EUID:-0} -ne 0 ]] || return 1
+    [[ -e "$path" && ! -L "$path" ]] || return 1
+    _mole_path_owned_by_current_user "$path" && return 1
+    local parent="${path%/*}"
+    [[ -n "$parent" ]] || parent=/
+    [[ -d "$parent" && -w "$parent" && ! -k "$parent" ]] || return 0
+    [[ ! -d "$path" || -w "$path" ]] || return 0
+    return 1
+}
+
 safe_remove() {
     local path="$1"
     local silent="${2:-false}"
@@ -1543,6 +1610,13 @@ safe_remove() {
     # Check if path exists
     if [[ ! -e "$path" ]]; then
         return 0
+    fi
+
+    # Before the dry-run return, so a preview never lists what the run refuses.
+    if _mole_user_sink_refuses_on_ownership "$path"; then
+        debug_log "Skipped removal of an item another user owns: $path"
+        log_operation "${MOLE_CURRENT_COMMAND:-clean}" "SKIPPED" "$path" "owned by another user"
+        return 1
     fi
 
     # Keep preview eligibility identical to real cleanup. This first check

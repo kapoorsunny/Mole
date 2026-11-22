@@ -16,7 +16,7 @@
   <img src="./docs/img/big-mole.png" alt="Mole 清理成果" width="1000" />
 </p>
 
-> 💡 這個倉庫是免費開源的命令列工具（`mo`），喜歡圖形介面的話可以另外下載 [Mole for Mac](https://mole.fit/)，支援刪除前逐項確認、實測 800 多款軟體的解除安裝殘留、系統維護、逐層分析磁碟空間、即時狀態監控，以及在支援的 Mac 上控制風扇，Windows 上對應的原生 App 是 [Mole for Windows](https://mole.fit/tw/windows)，`brew install mole` 只會安裝命令列工具。
+> 💡 這個倉庫是免費開源的命令列工具（`mo`），喜歡圖形介面的話可以另外下載 [Mole for Mac](https://mole.fit/)，支援刪除前逐項確認、實測 900 多款軟體的解除安裝殘留、系統維護、逐層分析磁碟空間、即時狀態監控，以及在支援的 Mac 上控制風扇，Windows 上對應的原生 App 是 [Mole for Windows](https://mole.fit/tw/windows)，`brew install mole` 只會安裝命令列工具。
 
 ## 功能
 
@@ -105,7 +105,7 @@ mo analyze /private/tmp      # 僅檢視暫存目錄（不自動清理）
 想裝特定版本就傳入 [Releases 頁面](https://github.com/tw93/mole/releases) 裡的任意 Tag，帶不帶開頭的 `V` 都行，想跟開發分支就傳 `main`：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/tw93/mole/main/install.sh | bash -s -- 1.73.0
+curl -fsSL https://raw.githubusercontent.com/tw93/mole/main/install.sh | bash -s -- 1.74.0
 curl -fsSL https://raw.githubusercontent.com/tw93/mole/main/install.sh | bash -s -- main
 ```
 
