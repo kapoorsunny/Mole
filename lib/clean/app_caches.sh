@@ -623,7 +623,6 @@ clean_code_editors() {
     mole_safe_clean_app_cache "Visual Studio Code" ~/Library/Application\ Support/Code/logs/* "VS Code logs"
     mole_safe_clean_app_cache "Visual Studio Code" ~/Library/Application\ Support/Code/Cache/* "VS Code cache"
     mole_safe_clean_app_cache "Visual Studio Code" ~/Library/Application\ Support/Code/CachedExtensionVSIXs/* "VS Code extension cache"
-    mole_safe_clean_app_cache "Cursor" ~/Library/Application\ Support/Cursor/CachedExtensionVSIXs/* "Cursor extension cache"
     mole_safe_clean_app_cache "Visual Studio Code" ~/Library/Application\ Support/Code/CachedData/* "VS Code data cache"
     mole_safe_clean_app_cache "Visual Studio Code" ~/Library/Application\ Support/Code/WebStorage/*/CacheStorage/* "VS Code webview cache"
     safe_clean ~/Library/Caches/com.sublimetext.*/* "Sublime Text cache"
@@ -655,6 +654,18 @@ clean_code_editors() {
         mole_safe_clean_app_cache "CodeBuddy CN" ~/Library/Application\ Support/CodeBuddy\ CN/DawnGraphiteCache/* "CodeBuddy CN Dawn cache"
         mole_safe_clean_app_cache "CodeBuddy CN" ~/Library/Application\ Support/CodeBuddy\ CN/DawnWebGPUCache/* "CodeBuddy CN WebGPU cache"
         mole_safe_clean_app_cache "CodeBuddy CN" ~/Library/Application\ Support/CodeBuddy\ CN/logs/* "CodeBuddy CN logs"
+    fi
+    # Cursor (VS Code fork, Electron)
+    if [[ -d ~/Library/Application\ Support/Cursor ]]; then
+        mole_safe_clean_app_cache "Cursor" ~/Library/Application\ Support/Cursor/Cache/* "Cursor cache"
+        mole_safe_clean_app_cache "Cursor" ~/Library/Application\ Support/Cursor/CachedData/* "Cursor cached data"
+        mole_safe_clean_app_cache "Cursor" ~/Library/Application\ Support/Cursor/CachedExtensionVSIXs/* "Cursor extension cache"
+        mole_safe_clean_app_cache "Cursor" ~/Library/Application\ Support/Cursor/Code\ Cache/* "Cursor code cache"
+        mole_safe_clean_app_cache "Cursor" ~/Library/Application\ Support/Cursor/GPUCache/* "Cursor GPU cache"
+        mole_safe_clean_app_cache "Cursor" ~/Library/Application\ Support/Cursor/DawnGraphiteCache/* "Cursor Dawn cache"
+        mole_safe_clean_app_cache "Cursor" ~/Library/Application\ Support/Cursor/DawnWebGPUCache/* "Cursor WebGPU cache"
+        mole_safe_clean_app_cache "Cursor" ~/Library/Application\ Support/Cursor/logs/* "Cursor logs"
+        mole_safe_clean_app_cache "Cursor" ~/Library/Application\ Support/Cursor/WebStorage/*/CacheStorage/* "Cursor webview cache"
     fi
 }
 # Lark / Feishu desktop embeds a Chromium webview (the "aha" explorer profile)
@@ -846,6 +857,46 @@ clean_notion_service_worker_caches() {
         fi
         [[ $guarded_rc -eq 0 ]] || return "$guarded_rc"
     done
+}
+
+clean_notion_partition_disk_caches() {
+    local partitions_root="$HOME/Library/Application Support/Notion/Partitions"
+    [[ -d "$partitions_root" ]] || return 0
+    local physical_root
+    physical_root=$(cd -P "$partitions_root" 2> /dev/null && pwd -P) || return 0
+    if [[ "$physical_root" != "$partitions_root" ]]; then
+        debug_log "Refusing symlinked Notion partitions root: $partitions_root -> $physical_root"
+        return 0
+    fi
+
+    local -a cache_targets=()
+    local _partition _leaf candidate physical_leaf
+    for _partition in "$partitions_root"/*; do
+        [[ -d "$_partition" && ! -L "$_partition" ]] || continue
+        for _leaf in "Cache" "Code Cache"; do
+            candidate="${_partition%/}/$_leaf"
+            [[ -d "$candidate" && ! -L "$candidate" ]] || continue
+            physical_leaf=$(cd -P "$candidate" 2> /dev/null && pwd -P) || continue
+            if [[ "$physical_leaf" != "$candidate" ]]; then
+                debug_log "Refusing symlinked Notion partition cache leaf: $candidate -> $physical_leaf"
+                continue
+            fi
+            if mole_cleanup_targets_exist "$physical_leaf"/*; then
+                cache_targets+=("$physical_leaf"/*)
+            fi
+        done
+    done
+    [[ ${#cache_targets[@]} -gt 0 ]] || return 0
+
+    local _MOLE_CLEAN_GUARD_REASON=""
+    if ! _notion_service_worker_delete_guard_allows; then
+        mole_report_guard_stop "Notion" \
+            mole_defer_cleanup_family "Notion"
+        return 0
+    fi
+
+    _app_cache_safe_clean_guarded _notion_service_worker_delete_guard_allows "Notion" \
+        "${cache_targets[@]}" "Notion web cache"
 }
 # WeChat and WeCom ship sandboxed, so their regenerable caches live under
 # ~/Library/Containers/<bundle id>/Data/ and the ~/Library/Caches/<bundle id>
@@ -1128,6 +1179,7 @@ clean_communication_apps() {
         "$HOME/Library/Containers/com.bytedance.macos.feishu/Data/Library/Caches" "Feishu cache"
     clean_feishu_service_worker_caches
     clean_notion_service_worker_caches
+    clean_notion_partition_disk_caches
     if [[ -d ~/Library/Application\ Support/Microsoft/Teams ]]; then
         mole_safe_clean_app_cache "Microsoft Teams" ~/Library/Application\ Support/Microsoft/Teams/Cache/* "Microsoft Teams legacy cache"
         mole_safe_clean_app_cache "Microsoft Teams" ~/Library/Application\ Support/Microsoft/Teams/Application\ Cache/* "Microsoft Teams legacy application cache"
@@ -1184,6 +1236,47 @@ _adobe_app_running() {
         -f '^/Applications/Adobe [^/]+(/Adobe [^/]+)?[.]app/Contents/MacOS/'
 }
 
+# Figma Desktop (Electron) stores its Chromium web, shader, and V8 bytecode
+# caches under ~/Library/Application Support/Figma/DesktopProfile/v*/.
+# Modern macOS versions no longer store substantial caches in
+# ~/Library/Caches/com.figma.Desktop, leaving hundreds of megabytes of
+# regenerable cache uncollected. Preserve durable state (Cookies, Local Storage,
+# Preferences, settings.json) and guard deletion while Figma is running.
+clean_figma_desktop_caches() {
+    mole_safe_clean_app_cache "Figma" ~/Library/Caches/com.figma.Desktop/* "Figma cache"
+    mole_safe_clean_app_cache "Figma" ~/Library/Caches/com.figma.agent/* "Figma Agent cache"
+
+    local desktop_profile_root="$HOME/Library/Application Support/Figma/DesktopProfile"
+    [[ -d "$desktop_profile_root" ]] || return 0
+    local physical_root
+    physical_root=$(cd -P "$desktop_profile_root" 2> /dev/null && pwd -P) || return 0
+    if [[ "$physical_root" != "$desktop_profile_root" ]]; then
+        debug_log "Refusing symlinked Figma profile root: $desktop_profile_root -> $physical_root"
+        return 0
+    fi
+
+    local -a cache_targets=()
+    local profile candidate physical_leaf leaf
+    for profile in "$desktop_profile_root"/*; do
+        [[ -d "$profile" && ! -L "$profile" ]] || continue
+        for leaf in "Cache" "Code Cache" "GPUCache" "DawnGraphiteCache" "DawnWebGPUCache"; do
+            candidate="${profile%/}/$leaf"
+            [[ -d "$candidate" && ! -L "$candidate" ]] || continue
+            physical_leaf=$(cd -P "$candidate" 2> /dev/null && pwd -P) || continue
+            if [[ "$physical_leaf" != "$candidate" ]]; then
+                debug_log "Refusing symlinked Figma cache leaf: $candidate -> $physical_leaf"
+                continue
+            fi
+            if mole_cleanup_targets_exist "$physical_leaf"/*; then
+                cache_targets+=("$physical_leaf"/*)
+            fi
+        done
+    done
+    [[ ${#cache_targets[@]} -gt 0 ]] || return 0
+
+    mole_safe_clean_app_cache "Figma" "${cache_targets[@]}" "Figma desktop cache"
+}
+
 # Design and creative tools.
 clean_design_tools() {
     safe_clean ~/Library/Caches/com.bohemiancoding.sketch3/* "Sketch cache"
@@ -1195,7 +1288,7 @@ clean_design_tools() {
     _dev_safe_clean_process_guarded _adobe_app_running "Adobe" "Adobe app caches" \
         ~/Library/Caches/com.adobe.*/* "Adobe app caches" || adobe_rc=$?
     [[ $adobe_rc -le 1 ]] || return "$adobe_rc"
-    safe_clean ~/Library/Caches/com.figma.Desktop/* "Figma cache"
+    clean_figma_desktop_caches
     local adobe_media_rc=0
     _dev_safe_clean_process_guarded _adobe_media_cache_running "Adobe" "Adobe media cache files" \
         ~/Library/Application\ Support/Adobe/Common/Media\ Cache\ Files/* "Adobe media cache files" || adobe_media_rc=$?

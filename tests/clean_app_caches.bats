@@ -949,6 +949,132 @@ EOF
     [[ "$output" == *"Figma cache"* ]]
 }
 
+@test "clean_figma_desktop_caches targets all profile cache leaves and preserves state" {
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+rm -rf "$HOME/Library/Application Support/Figma"
+profile_dir="$HOME/Library/Application Support/Figma/DesktopProfile/v43"
+mkdir -p "$profile_dir/Cache"
+mkdir -p "$profile_dir/Code Cache/js"
+mkdir -p "$profile_dir/GPUCache"
+mkdir -p "$profile_dir/DawnGraphiteCache"
+mkdir -p "$profile_dir/DawnWebGPUCache"
+# Siblings that must survive.
+mkdir -p "$profile_dir/Cookies"
+mkdir -p "$profile_dir/Local Storage"
+mkdir -p "$profile_dir/IndexedDB"
+touch "$profile_dir/Preferences"
+touch "$profile_dir/settings.json"
+touch "$HOME/Library/Application Support/Figma/desktop_state.json"
+
+touch "$profile_dir/Cache/data_0"
+touch "$profile_dir/Code Cache/js/code_0"
+touch "$profile_dir/GPUCache/data_0"
+touch "$profile_dir/DawnGraphiteCache/data_0"
+touch "$profile_dir/DawnWebGPUCache/data_0"
+
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/app_caches.sh"
+pgrep() { return 1; }
+safe_clean() {
+    local arg
+    for arg in "$@"; do
+        printf 'CLEAN:%s\n' "$arg"
+    done
+}
+clean_figma_desktop_caches
+EOF
+
+    [ "$status" -eq 0 ] || return 1
+    local pbase="$HOME/Library/Application Support/Figma/DesktopProfile/v43"
+    [[ "$output" == *"CLEAN:$pbase/Cache/data_0"* ]] || return 1
+    [[ "$output" == *"CLEAN:$pbase/Code Cache/js"* ]] || return 1
+    [[ "$output" == *"CLEAN:$pbase/GPUCache/data_0"* ]] || return 1
+    [[ "$output" == *"CLEAN:$pbase/DawnGraphiteCache/data_0"* ]] || return 1
+    [[ "$output" == *"CLEAN:$pbase/DawnWebGPUCache/data_0"* ]] || return 1
+    [[ "$output" == *"CLEAN:Figma desktop cache"* ]] || return 1
+    [[ "$output" != *"Cookies"* ]] || return 1
+    [[ "$output" != *"Local Storage"* ]] || return 1
+    [[ "$output" != *"IndexedDB"* ]] || return 1
+    [[ "$output" != *"Preferences"* ]] || return 1
+    [[ "$output" != *"settings.json"* ]] || return 1
+    [[ "$output" != *"desktop_state.json"* ]]
+}
+
+@test "clean_figma_desktop_caches defers while Figma is running" {
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+rm -rf "$HOME/Library/Application Support/Figma"
+profile_dir="$HOME/Library/Application Support/Figma/DesktopProfile/v43"
+mkdir -p "$profile_dir/Cache"
+touch "$profile_dir/Cache/data_0"
+
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/app_caches.sh"
+pgrep() { return 0; }
+mole_defer_cleanup_family() { echo "DEFER:$1"; }
+safe_clean() { echo "CLEAN:$*"; }
+clean_figma_desktop_caches
+EOF
+
+    [ "$status" -eq 0 ] || return 1
+    [[ "$output" == *"DEFER:Figma"* ]] || return 1
+    [[ "$output" != *"CLEAN:"* ]]
+}
+
+@test "clean_figma_desktop_caches refuses symlinked profile root and symlinked leaves" {
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+rm -rf "$HOME/Library/Application Support/Figma"
+external_root="$HOME/external_figma"
+rm -rf "$external_root"
+mkdir -p "$external_root/v43/Cache"
+touch "$external_root/v43/Cache/data_0"
+
+mkdir -p "$HOME/Library/Application Support/Figma"
+ln -s "$external_root" "$HOME/Library/Application Support/Figma/DesktopProfile"
+
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/app_caches.sh"
+pgrep() { return 1; }
+debug_log() { printf 'DEBUG:%s\n' "$*"; }
+safe_clean() { printf 'CLEAN:%s\n' "$*"; }
+clean_figma_desktop_caches
+EOF
+
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"DEBUG:Refusing symlinked Figma profile root"* ]] || { echo "$output"; return 1; }
+    [[ "$output" != *"v43"* ]]
+}
+
+@test "Figma DesktopProfile cache targets are not blocked by data protection policy" {
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+profile_dir="$HOME/Library/Application Support/Figma/DesktopProfile/v43"
+mkdir -p "$profile_dir/Cache" "$profile_dir/Code Cache" "$profile_dir/GPUCache" \
+    "$profile_dir/DawnGraphiteCache" "$profile_dir/DawnWebGPUCache"
+touch "$profile_dir/Cache/data_0" "$profile_dir/Code Cache/code_0" "$profile_dir/GPUCache/data_0" \
+    "$profile_dir/DawnGraphiteCache/data_0" "$profile_dir/DawnWebGPUCache/data_0"
+
+source "$PROJECT_ROOT/lib/core/common.sh"
+for target in "$profile_dir/Cache/data_0" \
+              "$profile_dir/Code Cache/code_0" \
+              "$profile_dir/GPUCache/data_0" \
+              "$profile_dir/DawnGraphiteCache/data_0" \
+              "$profile_dir/DawnWebGPUCache/data_0"; do
+    if should_protect_path "$target"; then
+        echo "BLOCKED_PROTECTION:$target"
+        exit 1
+    fi
+    validate_path_for_deletion "$target"
+done
+echo "ALL_TARGETS_VALIDATED"
+EOF
+
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"ALL_TARGETS_VALIDATED"* ]]
+}
+
 # Adobe's video apps read and write Common/Media Cache Files while open, and
 # their bundle names carry a year. Each holder in the list must keep the row;
 # an unrelated Adobe app must not, and the sibling Media Cache database is
@@ -1322,6 +1448,61 @@ EOF
     [[ "$output" != *"ScriptCache"* ]] || return 1
     [[ "$output" != *"Database"* ]] || return 1
     [[ "$output" != *"Local Storage"* ]]
+}
+
+@test "clean_notion_partition_disk_caches targets Cache and Code Cache in every partition" {
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+partitions="$HOME/Library/Application Support/Notion/Partitions"
+mkdir -p "$partitions/notion/Cache/Cache_Data"
+mkdir -p "$partitions/notion/Code Cache/js"
+# Siblings that must survive.
+mkdir -p "$partitions/notion/Cookies"
+mkdir -p "$partitions/notion/Local Storage"
+mkdir -p "$partitions/notion/IndexedDB"
+touch "$partitions/notion/Cache/Cache_Data/f_0001"
+touch "$partitions/notion/Code Cache/js/bytecode"
+
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/app_caches.sh"
+notion_running() { return 1; }
+safe_clean() {
+    local arg
+    for arg in "$@"; do
+        printf 'CLEAN:%s\n' "$arg"
+    done
+}
+clean_notion_partition_disk_caches
+EOF
+
+    [ "$status" -eq 0 ] || return 1
+    local base="$HOME/Library/Application Support/Notion/Partitions"
+    [[ "$output" == *"CLEAN:$base/notion/Cache/Cache_Data"* ]] || return 1
+    [[ "$output" == *"CLEAN:$base/notion/Code Cache/js"* ]] || return 1
+    [[ "$output" == *"CLEAN:Notion web cache"* ]] || return 1
+    [[ "$output" != *"Cookies"* ]] || return 1
+    [[ "$output" != *"Local Storage"* ]] || return 1
+    [[ "$output" != *"IndexedDB"* ]]
+}
+
+@test "clean_notion_partition_disk_caches defers while Notion is running" {
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+partitions="$HOME/Library/Application Support/Notion/Partitions"
+mkdir -p "$partitions/notion/Cache/Cache_Data"
+touch "$partitions/notion/Cache/Cache_Data/f_0001"
+
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/app_caches.sh"
+notion_running() { return 0; }
+mole_defer_cleanup_family() { echo "DEFER:$1"; }
+safe_clean() { echo "CLEAN:$*"; }
+clean_notion_partition_disk_caches
+EOF
+
+    [ "$status" -eq 0 ] || return 1
+    [[ "$output" == *"DEFER:Notion"* ]] || return 1
+    [[ "$output" != *"CLEAN:"* ]]
 }
 
 @test "clean_notion_service_worker_caches defers every partition while Notion is running" {
@@ -2053,6 +2234,70 @@ EOF
 
     [ "$status" -eq 0 ]
     [[ "$output" != *"CodeBuddy"* ]]
+}
+
+@test "clean_code_editors includes Cursor caches when directory exists" {
+    mkdir -p "$HOME/Library/Application Support/Cursor"
+
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/app_caches.sh"
+safe_clean() { echo "$2"; }
+clean_code_editors
+EOF
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Cursor cache"* ]] || return 1
+    [[ "$output" == *"Cursor cached data"* ]] || return 1
+    [[ "$output" == *"Cursor extension cache"* ]] || return 1
+    [[ "$output" == *"Cursor code cache"* ]] || return 1
+    [[ "$output" == *"Cursor GPU cache"* ]] || return 1
+    [[ "$output" == *"Cursor Dawn cache"* ]] || return 1
+    [[ "$output" == *"Cursor WebGPU cache"* ]] || return 1
+    [[ "$output" == *"Cursor logs"* ]] || return 1
+    [[ "$output" == *"Cursor webview cache"* ]]
+}
+
+@test "clean_code_editors skips Cursor when directory is absent" {
+    rm -rf "$HOME/Library/Application Support/Cursor"
+
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/app_caches.sh"
+safe_clean() { echo "$2"; }
+clean_code_editors
+EOF
+
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"Cursor"* ]]
+}
+
+@test "Cursor editor cache targets are not blocked by data protection policy" {
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/core/app_protection.sh"
+source "$PROJECT_ROOT/lib/core/file_ops.sh"
+
+cursor_root="$HOME/Library/Application Support/Cursor"
+mkdir -p "$cursor_root/Cache" "$cursor_root/CachedData" "$cursor_root/GPUCache" "$cursor_root/logs"
+touch "$cursor_root/Cache/data" "$cursor_root/CachedData/cache_entry" "$cursor_root/GPUCache/shader" "$cursor_root/logs/renderer.log"
+
+for target in "$cursor_root/Cache/data" "$cursor_root/CachedData/cache_entry" "$cursor_root/GPUCache/shader" "$cursor_root/logs/renderer.log"; do
+    if should_protect_path "$target"; then
+        echo "PROTECTED:$target"
+        exit 1
+    fi
+    if ! validate_path_for_deletion "$target"; then
+        echo "VALIDATE_FAILED:$target"
+        exit 1
+    fi
+done
+EOF
+
+    [ "$status" -eq 0 ]
 }
 
 @test "clean_media_players includes QQ Music Mac container caches" {

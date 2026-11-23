@@ -4262,7 +4262,7 @@ _automation_browser_process_records() {
             command = $9
             for (i = 10; i <= NF; i++) command = command " " $i
         }
-        command ~ /playwright_chromiumdev_profile/ {
+        command ~ /(playwright_chromiumdev_profile|puppeteer_dev_chrome_profile|puppeteer_dev_firefox_profile)/ {
             print $1 "|" $4 " " $5 " " $6 " " $7 " " $8
         }'
 }
@@ -4308,7 +4308,9 @@ clean_dev_automation_browsers() {
     if [[ -n "$tmpdir" ]]; then
         local d now age_hours
         now=$(date +%s)
-        for d in "$tmpdir"playwright_chromiumdev_profile-*; do
+        for d in "$tmpdir"playwright_chromiumdev_profile-* \
+            "$tmpdir"puppeteer_dev_chrome_profile-* \
+            "$tmpdir"puppeteer_dev_firefox_profile-*; do
             [[ -d "$d" ]] || continue
             age_hours=$(((now - $("$STAT_BSD" -f %m "$d" 2> /dev/null || echo "$now")) / 3600))
             [[ "$age_hours" -ge 2 ]] || continue
@@ -4377,6 +4379,7 @@ clean_dev_ai_agents() {
     local -a agent_specs=(
         "$HOME/.local/share/claude/versions|Claude Code old version|$HOME/.local/bin/claude"
         "$HOME/.local/share/cursor-agent/versions|Cursor Agent old version|$HOME/.local/bin/cursor-agent"
+        "$HOME/Library/Application Support/Cursor/User/globalStorage/anysphere.cursor-agent-worker/agent-cli/.local/share/cursor-agent/versions|Cursor Agent old version|$HOME/Library/Application Support/Cursor/User/globalStorage/anysphere.cursor-agent-worker/agent-cli/.local/bin/cursor-agent"
         "$HOME/.copilot/pkg/universal|GitHub Copilot CLI old version|$HOME/.local/bin/copilot"
     )
 
@@ -4674,15 +4677,25 @@ clean_codex_desktop_caches() {
         return 0
     fi
 
-    # Measured on ChatGPT 26.727.40816: these six Chromium leaves reclaimed
-    # 313,860 KiB. Local Storage, IndexedDB, cookies, sessions, preferences, and
-    # every Application Support sibling are deliberate non-targets because they
-    # can hold durable state rather than rebuildable cache data.
+    # Measured on ChatGPT 26.727.40816: these Chromium leaves reclaimed
+    # hundreds of megabytes. Dynamic webview partitions (codex-browser-app,
+    # MCP sandboxes) live under Default/Partitions/. Local Storage, IndexedDB,
+    # cookies, sessions, preferences, and every Application Support sibling
+    # are deliberate non-targets because they can hold durable state rather
+    # than rebuildable cache data.
     local -a profiles=(
         "$cache_root/Default"
-        "$cache_root/Default/Partitions/codex-browser-app"
         "$cache_root/codex-browser-app"
     )
+    if [[ -d "$cache_root/Default/Partitions" ]]; then
+        local partition_dir
+        for partition_dir in "$cache_root/Default/Partitions"/*; do
+            [[ -d "$partition_dir" && ! -L "$partition_dir" ]] || continue
+            profiles+=("$partition_dir")
+        done
+    else
+        profiles+=("$cache_root/Default/Partitions/codex-browser-app")
+    fi
     local -a leaves=("Cache" "Code Cache")
     local -a cleanable_physical_leaves=()
     local -a cleanable_leaf_labels=()
@@ -6350,9 +6363,17 @@ clean_dev_misc() {
     # Cursor Agent session logs (versions cleaned separately in clean_dev_ai_agents)
     if [[ -d "$HOME/.local/share/cursor-agent" ]]; then
         local cursor_logs_rc=0
-        safe_find_delete "$HOME/.local/share/cursor-agent" "*.log" "$MOLE_LOG_AGE_DAYS" "f" || cursor_logs_rc=$?
+        safe_find_delete "$HOME/.local/share/cursor-agent" "*.log" "$MOLE_LOG_AGE_DAYS" "f" "Cursor Agent logs" || cursor_logs_rc=$?
         if mole_rc_signal "$cursor_logs_rc"; then
             return "$cursor_logs_rc"
+        fi
+    fi
+    local cursor_worker_dir="$HOME/Library/Application Support/Cursor/User/globalStorage/anysphere.cursor-agent-worker"
+    if [[ -d "$cursor_worker_dir" && ! -L "$cursor_worker_dir" ]]; then
+        local cursor_worker_logs_rc=0
+        safe_find_delete "$cursor_worker_dir" "cursor-agent-worker-*.log" "$MOLE_LOG_AGE_DAYS" "f" "Cursor Agent worker logs" || cursor_worker_logs_rc=$?
+        if mole_rc_signal "$cursor_worker_logs_rc"; then
+            return "$cursor_worker_logs_rc"
         fi
     fi
     # Playwright browser revisions are hard-protected by should_protect_path,
