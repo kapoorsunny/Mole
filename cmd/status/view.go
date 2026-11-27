@@ -22,6 +22,19 @@ func renderTerminalTooSmall(width, height int) string {
 		Render("Terminal too small. Enlarge the window to view status.")
 }
 
+var statusKeyHints = []string{"K Cat", "C Cores", "Esc/Q Quit"}
+
+// renderKeyHints drops hints from the front until the line fits, so the quit
+// key is the last to go. It returns "" when not even that fits.
+func renderKeyHints(width int) string {
+	for i := range statusKeyHints {
+		if line := strings.Join(statusKeyHints[i:], " | "); ansi.StringWidth(line) <= width {
+			return subtleStyle.Render(line)
+		}
+	}
+	return ""
+}
+
 var (
 	titleStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#C79FD7")).Bold(true)
 	subtleStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#737373"))
@@ -848,6 +861,9 @@ func renderBatteryCard(batts []BatteryStatus, thermal ThermalStatus, probed bool
 			subtleStyle.Render(placeholderValue),
 		)
 	} else if len(batts) == 0 {
+		if thermal.SystemPower > 0 {
+			lines = append(lines, fmt.Sprintf("Draw   %.1fW", thermal.SystemPower))
+		}
 		lines = append(lines, subtleStyle.Render("No battery"))
 	} else {
 		b := batts[0]

@@ -694,7 +694,7 @@ for group in clean_communication_apps clean_dingtalk clean_ai_apps clean_design_
     clean_video_players clean_download_managers clean_gaming_platforms \
     clean_translation_apps clean_screenshot_tools clean_email_clients clean_task_apps \
     clean_shell_utils clean_system_utils clean_note_apps clean_launcher_apps \
-    clean_remote_desktop; do
+    clean_remote_desktop clean_update_package_leftovers; do
     eval "$group() { echo GROUP; }"
 done
 clean_user_gui_applications
@@ -708,8 +708,8 @@ EOF
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
     local first_run
     first_run=$(printf '%s\n' "$output" | sed -n '1,/^RC=/p' | tr '\n' ' ')
-    # Twenty groups, each one preceded by its own spinner start, then one stop.
-    [ "$(printf '%s\n' "$output" | sed -n '1,/^RC=/p' | grep -c '^START$')" -eq 20 ] || { echo "$first_run"; return 1; }
+    # Twenty-one groups, each one preceded by its own spinner start, then one stop.
+    [ "$(printf '%s\n' "$output" | sed -n '1,/^RC=/p' | grep -c '^START$')" -eq 21 ] || { echo "$first_run"; return 1; }
     [[ "$first_run" != *"GROUP GROUP"* ]] || { echo "$first_run"; return 1; }
     [[ "$first_run" == *"GROUP STOP RC=0"* ]] || { echo "$first_run"; return 1; }
     # A cancelled download-manager group still stops the spinner and returns its status.
@@ -939,14 +939,16 @@ EOF
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/app_caches.sh"
-safe_clean() { echo "$2"; }
+safe_clean() { echo "${!#}"; }
 pgrep() { return 1; }
 clean_design_tools
 EOF
 
     [ "$status" -eq 0 ]
     [[ "$output" == *"Sketch cache"* ]] || return 1
-    [[ "$output" == *"Figma cache"* ]]
+    [[ "$output" == *"Figma cache"* ]] || return 1
+    # Desktop, agent and profile caches are one Figma row.
+    [[ "$(grep -c '^Figma' <<< "$output")" == 1 ]]
 }
 
 @test "clean_figma_desktop_caches targets all profile cache leaves and preserves state" {
@@ -992,7 +994,7 @@ EOF
     [[ "$output" == *"CLEAN:$pbase/GPUCache/data_0"* ]] || return 1
     [[ "$output" == *"CLEAN:$pbase/DawnGraphiteCache/data_0"* ]] || return 1
     [[ "$output" == *"CLEAN:$pbase/DawnWebGPUCache/data_0"* ]] || return 1
-    [[ "$output" == *"CLEAN:Figma desktop cache"* ]] || return 1
+    [[ "$output" == *"CLEAN:Figma cache"* ]] || return 1
     [[ "$output" != *"Cookies"* ]] || return 1
     [[ "$output" != *"Local Storage"* ]] || return 1
     [[ "$output" != *"IndexedDB"* ]] || return 1
@@ -1251,13 +1253,14 @@ mkdir -p ~/Library/Application\ Support/Microsoft/Teams
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/app_caches.sh"
 pgrep() { return 1; }
-safe_clean() { echo "$2"; }
+safe_clean() { local label="${!#}" target; echo "CALL:$label"; for target in "${@:1:$#-1}"; do echo "CLEAN:$target|$label"; done; }
 clean_communication_apps
 EOF
 
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Microsoft Teams legacy cache"* ]] || return 1
-    [[ "$output" == *"Microsoft Teams legacy logs"* ]]
+    [[ "$output" == *"/Microsoft/Teams/Cache/"*"|Microsoft Teams legacy cache"* ]] || return 1
+    [[ "$output" == *"/Microsoft/Teams/logs/"*"|Microsoft Teams legacy cache"* ]] || return 1
+    [[ "$(grep -c '^CALL:Microsoft Teams legacy' <<< "$output")" == 1 ]]
 }
 
 @test "clean_communication_apps cleans Vesktop session caches only while Vesktop is not running" {
@@ -1471,11 +1474,14 @@ safe_clean() {
     for arg in "$@"; do
         printf 'CLEAN:%s\n' "$arg"
     done
+    printf 'FINAL:%s\n' "${_MOLE_SAFE_REMOVE_FINAL_GUARD:-none}"
 }
 clean_notion_partition_disk_caches
 EOF
 
     [ "$status" -eq 0 ] || return 1
+    # The owner is asked again inside safe_remove, not only before the batch.
+    [[ "$output" == *"FINAL:_notion_service_worker_delete_guard_allows"* ]] || return 1
     local base="$HOME/Library/Application Support/Notion/Partitions"
     [[ "$output" == *"CLEAN:$base/notion/Cache/Cache_Data"* ]] || return 1
     [[ "$output" == *"CLEAN:$base/notion/Code Cache/js"* ]] || return 1
@@ -1818,7 +1824,9 @@ EOF
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/app_caches.sh"
-safe_clean() { echo "CLEAN:$1|$2"; }
+# A host that runs the editor must not change what this case sees.
+pgrep() { return 1; }
+safe_clean() { local label="${!#}" target; echo "CALL:$label"; for target in "${@:1:$#-1}"; do echo "CLEAN:$target|$label"; done; }
 clean_code_editors
 EOF
 
@@ -1829,6 +1837,8 @@ EOF
     [[ "$output" != *"$HOME/Library/Application Support/Zed/db"* ]] || return 1
     [[ "$output" != *"node-v24.11.0-darwin-arm64/bin"* ]] || return 1
     [[ "$output" == *"Zed logs"* ]] || return 1
+    [[ "$(grep -c '^CALL:Zed npm cache' <<< "$output")" == 1 ]] || return 1
+    [[ "$(grep -c '^CALL:VS Code cache' <<< "$output")" == 1 ]]
 }
 
 @test "clean_code_editors includes VS Code WebStorage CacheStorage only" {
@@ -1841,12 +1851,12 @@ set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/app_caches.sh"
 pgrep() { return 1; }
-safe_clean() { echo "CLEAN:$1|$2"; }
+safe_clean() { local label="${!#}" target; echo "CALL:$label"; for target in "${@:1:$#-1}"; do echo "CLEAN:$target|$label"; done; }
 clean_code_editors
 EOF
 
     [ "$status" -eq 0 ]
-    [[ "$output" == *"CLEAN:$HOME/Library/Application Support/Code/WebStorage/29/CacheStorage/uuid-1|VS Code webview cache"* ]] || return 1
+    [[ "$output" == *"CLEAN:$HOME/Library/Application Support/Code/WebStorage/29/CacheStorage/uuid-1|VS Code cache"* ]] || return 1
     [[ "$output" != *"Local Storage"* ]] || return 1
     [[ "$output" != *"QuotaManager"* ]]
 }
@@ -2195,6 +2205,8 @@ JSON
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/app_caches.sh"
+# A host that runs the editor must not change what this case sees.
+pgrep() { return 1; }
 safe_clean() { echo "$2"; }
 clean_code_editors
 EOF
@@ -2211,14 +2223,17 @@ EOF
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/app_caches.sh"
-safe_clean() { echo "$2"; }
+# A host that runs the editor must not change what this case sees.
+pgrep() { return 1; }
+safe_clean() { local label="${!#}" target; echo "CALL:$label"; for target in "${@:1:$#-1}"; do echo "CLEAN:$target|$label"; done; }
 clean_code_editors
 EOF
 
     [ "$status" -eq 0 ]
-    [[ "$output" == *"CodeBuddy CN cache"* ]] || return 1
-    [[ "$output" == *"CodeBuddy CN logs"* ]] || return 1
-    [[ "$output" == *"CodeBuddy CN GPU cache"* ]]
+    [[ "$output" == *"/CodeBuddy CN/Cache/"*"|CodeBuddy CN cache"* ]] || return 1
+    [[ "$output" == *"/CodeBuddy CN/logs/"*"|CodeBuddy CN cache"* ]] || return 1
+    [[ "$output" == *"/CodeBuddy CN/GPUCache/"*"|CodeBuddy CN cache"* ]] || return 1
+    [[ "$(grep -c '^CALL:CodeBuddy CN' <<< "$output")" == 1 ]]
 }
 
 @test "clean_code_editors skips CodeBuddy when directories are absent" {
@@ -2236,6 +2251,43 @@ EOF
     [[ "$output" != *"CodeBuddy"* ]]
 }
 
+@test "Electron app caches clean in one call per app" {
+    local case_home="$HOME/one-call-per-app"
+    local app_support="$case_home/Library/Application Support"
+    mkdir -p "$app_support/vesktop/sessionData/Cache" "$app_support/mihomo-party/Cache" \
+        "$app_support/Antigravity/Cache" "$app_support/Filo/production/Cache" \
+        "$app_support/Claude/Cache" "$app_support/Qoder/Cache"
+
+    run env HOME="$case_home" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/app_caches.sh"
+source "$PROJECT_ROOT/lib/clean/dev.sh"
+pgrep() { return 1; }
+safe_clean() { echo "CALL:${!#}"; }
+safe_find_delete() { :; }
+note_activity() { :; }
+clean_service_worker_cache() { :; }
+clean_codex_runtimes() { :; }
+clean_codex_desktop_staging() { :; }
+clean_codex_desktop_caches() { :; }
+clean_codex_cli() { :; }
+clean_antigravity_caches() { :; }
+clean_communication_apps
+clean_system_utils
+clean_dev_misc
+EOF
+
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    local label
+    local app
+    # Count every row the app prints, so a split back into per-folder rows fails.
+    for app in Vesktop mihomo-party Antigravity Filo Claude Qoder; do
+        [[ "$(grep -c "^CALL:$app " <<< "$output")" == 1 ]] || { echo "ROWS:$app"; return 1; }
+        [[ "$output" == *"CALL:$app cache"* ]] || { echo "LABEL:$app"; return 1; }
+    done
+}
+
 @test "clean_code_editors includes Cursor caches when directory exists" {
     mkdir -p "$HOME/Library/Application Support/Cursor"
 
@@ -2243,20 +2295,24 @@ EOF
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/app_caches.sh"
-safe_clean() { echo "$2"; }
+# A host that runs the editor must not change what this case sees.
+pgrep() { return 1; }
+safe_clean() { local label="${!#}" target; echo "CALL:$label"; for target in "${@:1:$#-1}"; do echo "CLEAN:$target|$label"; done; }
 clean_code_editors
 EOF
 
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Cursor cache"* ]] || return 1
-    [[ "$output" == *"Cursor cached data"* ]] || return 1
-    [[ "$output" == *"Cursor extension cache"* ]] || return 1
-    [[ "$output" == *"Cursor code cache"* ]] || return 1
-    [[ "$output" == *"Cursor GPU cache"* ]] || return 1
-    [[ "$output" == *"Cursor Dawn cache"* ]] || return 1
-    [[ "$output" == *"Cursor WebGPU cache"* ]] || return 1
-    [[ "$output" == *"Cursor logs"* ]] || return 1
-    [[ "$output" == *"Cursor webview cache"* ]]
+    [[ "$output" == *"/Cursor/Cache/"*"|Cursor cache"* ]] || return 1
+    [[ "$output" == *"/Cursor/CachedData/"*"|Cursor cache"* ]] || return 1
+    [[ "$output" == *"/Cursor/CachedExtensionVSIXs/"*"|Cursor cache"* ]] || return 1
+    [[ "$output" == *"/Cursor/Code Cache/"*"|Cursor cache"* ]] || return 1
+    [[ "$output" == *"/Cursor/GPUCache/"*"|Cursor cache"* ]] || return 1
+    [[ "$output" == *"/Cursor/DawnGraphiteCache/"*"|Cursor cache"* ]] || return 1
+    [[ "$output" == *"/Cursor/DawnWebGPUCache/"*"|Cursor cache"* ]] || return 1
+    [[ "$output" == *"/Cursor/logs/"*"|Cursor cache"* ]] || return 1
+    [[ "$output" == *"/Cursor/WebStorage/"*"|Cursor cache"* ]] || return 1
+    # One call, so the editor reads as one row however many leaves it has.
+    [[ "$(grep -c '^CALL:Cursor' <<< "$output")" == 1 ]]
 }
 
 @test "clean_code_editors skips Cursor when directory is absent" {
@@ -3680,7 +3736,7 @@ set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/app_caches.sh"
 pgrep() { return 1; }
-safe_clean() { printf 'CLEAN:%s\n' "$1"; }
+safe_clean() { local label="${!#}" target; echo "CALL:$label"; for target in "${@:1:$#-1}"; do echo "CLEAN:$target|$label"; done; }
 clean_code_editors
 EOF
     [ "$status" -eq 0 ] || return 1
@@ -4014,3 +4070,49 @@ EOF
     [[ "$output" == *"SCG|WeChat web cache|3"* ]] || { echo "$output"; return 1; }
     [ "$(printf '%s\n' "$output" | grep -c '^SCG|WeChat service worker cache|')" -eq 1 ] || { echo "$output"; return 1; }
 }
+
+@test "clean_update_package_leftovers offers only stale update packages outside Library/Caches" {
+    local support="$HOME/Library/Application Support"
+    local lark="$support/LarkShell/update/update_downloading"
+    local ego="$support/Citro Labs/EgoUpdater/crx_cache"
+    mkdir -p "$lark/sub.zip" "$ego"
+    touch -t 202601010000 "$lark/Feishu-7.1.dmg" "$lark/notes.txt" "$ego/payload"
+    touch "$lark/Feishu-7.2.zip" "$ego/fresh"
+    ln -s "$lark/Feishu-7.1.dmg" "$lark/link.pkg"
+    # A linked vendor folder must not move the sweep somewhere else.
+    local elsewhere="$HOME/elsewhere-downloads"
+    mkdir -p "$elsewhere/TabbitUpdater/crx_cache"
+    touch -t 202601010000 "$elsewhere/TabbitUpdater/crx_cache/keep.zip"
+    ln -s "$elsewhere" "$support/Tabbit"
+
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/app_caches.sh"
+safe_clean() { local label="${!#}" target; for target in "${@:1:$#-1}"; do echo "CLEAN:$target|$label"; done; }
+clean_update_package_leftovers
+EOF
+
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"CLEAN:$lark/Feishu-7.1.dmg|Update package leftovers"* ]] || { echo "$output"; return 1; }
+    [[ "$output" == *"CLEAN:$ego/payload|Update package leftovers"* ]] || { echo "$output"; return 1; }
+    [[ "$output" != *"Feishu-7.2.zip"* && "$output" != *"notes.txt"* && "$output" != *"fresh"* ]] || { echo "$output"; return 1; }
+    [[ "$output" != *"link.pkg"* && "$output" != *"sub.zip"* ]] || { echo "$output"; return 1; }
+    [[ "$output" != *"keep.zip"* && "$output" != *"elsewhere"* ]] || { echo "$output"; return 1; }
+}
+
+@test "clean_update_package_leftovers stays silent without stale packages" {
+    local empty_home="$HOME/empty-update-home"
+    mkdir -p "$empty_home/Library/Application Support/Tabbit/TabbitUpdater/crx_cache"
+    touch "$empty_home/Library/Application Support/Tabbit/TabbitUpdater/crx_cache/fresh"
+    run env HOME="$empty_home" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/app_caches.sh"
+safe_clean() { echo "CALLED:$*"; }
+clean_update_package_leftovers
+EOF
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" != *"CALLED:"* ]] || { echo "$output"; return 1; }
+}
+

@@ -365,13 +365,14 @@ func collectThermal() ThermalStatus {
 		}
 	}
 
-	// Power metrics from ioreg (fast, real-time).
+	// Power telemetry can persist for a minute on a desktop Mac.
 	ctxPower, cancelPower := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancelPower()
 	if out, err := runCmd(ctxPower, "ioreg", "-rn", "AppleSmartBattery"); err == nil {
 		powerThermal := parseAppleSmartBatteryThermal(out)
 		thermal.BatteryTemp = powerThermal.BatteryTemp
 		thermal.SystemPower = powerThermal.SystemPower
+		thermal.probeDesktopPower = powerThermal.probeDesktopPower
 		thermal.AdapterPower = powerThermal.AdapterPower
 		thermal.BatteryPower = powerThermal.BatteryPower
 	}
@@ -395,12 +396,19 @@ func collectThermal() ThermalStatus {
 func parseAppleSmartBatteryThermal(out string) ThermalStatus {
 	var thermal ThermalStatus
 	var (
-		voltageMV  float64
-		amperageMA float64
+		voltageMV      float64
+		amperageMA     float64
+		inputVoltageMV float64
+		inputCurrentMA float64
+		batteryAbsent  bool
 	)
 
 	for line := range strings.Lines(out) {
 		line = strings.TrimSpace(line)
+
+		if installed, found := ioRegValueForKey(line, "BatteryInstalled"); found {
+			batteryAbsent = installed == "No"
+		}
 
 		// AppleSmartBattery reports battery temperature in centi-degrees Celsius.
 		if tempRaw, found := parseIORegFloatValue(line, "Temperature"); found && tempRaw > 0 {
@@ -432,6 +440,13 @@ func parseAppleSmartBatteryThermal(out string) ThermalStatus {
 			}
 		}
 
+		if voltage, found := parseIORegFloatValue(line, "SystemVoltageIn"); found && voltage > 0 {
+			inputVoltageMV = voltage
+		}
+		if current, found := parseIORegFloatValue(line, "SystemCurrentIn"); found && current > 0 {
+			inputCurrentMA = current
+		}
+
 		// Battery power (mW -> W, positive = discharging, negative = charging).
 		if powerMW, found := parseIORegSignedNumber(line, "BatteryPower"); found {
 			setBatteryPowerMW(&thermal, powerMW)
@@ -449,6 +464,13 @@ func parseAppleSmartBatteryThermal(out string) ThermalStatus {
 		if amperage, found := parseIORegSignedNumber(line, "Amperage"); found && amperage != 0 && amperageMA == 0 {
 			amperageMA = amperage
 		}
+	}
+
+	// On batteryless desktops, prefer a fresh SMC reading on each snapshot
+	// when there is no direct wattage. Keep the registry V/I as a fallback.
+	thermal.probeDesktopPower = batteryAbsent && thermal.SystemPower == 0
+	if thermal.SystemPower == 0 && inputVoltageMV > 0 && inputCurrentMA > 0 {
+		setSystemPowerMW(&thermal, inputVoltageMV*inputCurrentMA/1000.0)
 	}
 
 	if thermal.BatteryPower == 0 && voltageMV > 0 && amperageMA != 0 {

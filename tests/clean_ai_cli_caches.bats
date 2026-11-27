@@ -158,6 +158,38 @@ EOF
     assert_output_not_contains "STILL_PRESENT:"
 }
 
+@test "clean_codex_desktop_caches previews one row across every profile and partition" {
+    run env HOME="$HOME/codex-cache-rows" PROJECT_ROOT="$PROJECT_ROOT" MOLE_TEST_NO_AUTH=1 /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+cache_root="$HOME/Library/Caches/Codex"
+for profile in \
+    "Default" \
+    "codex-browser-app" \
+    "Default/Partitions/codex-browser-app" \
+    "Default/Partitions/codex-mcp-app-sandbox%3Ashared" \
+    "Default/Partitions/codex-mcp-app-sandbox%3Aconnection-1"; do
+    mkdir -p "$cache_root/$profile/Cache" "$cache_root/$profile/Code Cache"
+    echo data > "$cache_root/$profile/Cache/entry.bin"
+    echo data > "$cache_root/$profile/Code Cache/entry.bin"
+done
+
+source "$PROJECT_ROOT/bin/clean.sh"
+pgrep() { return 1; }
+DRY_RUN=true
+MOLE_DRY_RUN=1
+rows=$(clean_codex_desktop_caches 2>&1)
+printf 'ROWS=%s;\n' "$(printf '%s\n' "$rows" | grep -c 'Codex Desktop' || true)"
+printf 'ITEMS=%s;\n' "$(printf '%s\n' "$rows" | grep -c '10 items' || true)"
+remaining=$(find "$cache_root" -name entry.bin | wc -l | tr -d ' ')
+printf 'REMAINING=%s\n' "$remaining"
+EOF
+
+    assert_run_success
+    assert_output_contains "ROWS=1;"
+    assert_output_contains "ITEMS=1;"
+    assert_output_contains "REMAINING=10"
+}
+
 @test "clean_codex_desktop_caches cleans dynamic MCP sandbox partitions and preserves durable state" {
     run env HOME="$HOME/codex-cache-mcp" PROJECT_ROOT="$PROJECT_ROOT" MOLE_TEST_NO_AUTH=1 /bin/bash --noprofile --norc << 'EOF'
 set -euo pipefail
@@ -807,6 +839,33 @@ EOF
     assert_output_contains "CODEX_CACHE_CALLED"
     assert_output_contains "CODEX_STAGING_CALLED"
     assert_output_contains "ANTIGRAVITY_CALLED"
+}
+
+@test "clean_dev_misc leaves the Figma cache to the guarded design tools row" {
+    mkdir -p "$HOME/Library/Caches/com.figma.Desktop"
+    touch "$HOME/Library/Caches/com.figma.Desktop/cache.bin"
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/dev.sh"
+safe_clean() { printf 'CLEAN:%s\n' "$@"; }
+safe_find_delete() { :; }
+clean_service_worker_cache() { :; }
+clean_codex_runtimes() { :; }
+clean_codex_desktop_staging() { :; }
+clean_codex_desktop_caches() { :; }
+note_activity() { :; }
+clean_codex_cli() { :; }
+clean_antigravity_caches() { :; }
+clean_dev_misc
+echo "DEV_MISC_DONE"
+EOF
+
+    assert_run_success
+    assert_output_contains "DEV_MISC_DONE"
+    # Developer tools run before GUI apps, so an unguarded copy here would
+    # clear the cache while Figma runs, ahead of the process check.
+    assert_output_not_contains "com.figma.Desktop"
 }
 
 @test "clean_dev_ai_agents reaps stale Claude Desktop bundled versions when active version is known" {

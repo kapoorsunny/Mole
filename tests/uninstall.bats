@@ -2705,6 +2705,7 @@ expect com.avg.hub AVG
 expect com.example.app AVG "AVG AntiVirus"
 expect com.malwarebytes.mbam.frontend.application Malwarebytes
 expect com.bitdefender.antivirusformac Bitdefender
+expect com.bitdefender.vpn Bitdefender
 expect com.intego.virusbarrier.app Intego
 expect com.kaspersky.kav.gui Kaspersky
 expect com.symantec.nfm Norton
@@ -2714,6 +2715,7 @@ expect com.adobe.gcclient "Adobe Genuine Service"
 expect com.kaspersky.passwordmanager ""
 expect com.intego.washingmachine ""
 expect com.bitdefender.virusscanner ""
+expect com.bitdefender.iosvpn ""
 expect com.adobe.Photoshop ""
 echo DONE
 EOF
@@ -5988,13 +5990,18 @@ INNER
     rm -f "$apps_cache"
 }
 
-@test "uninstall main sets MOLE_UNINSTALL_WITH_DATA only with --with-data" {
+@test "uninstall main takes the data selection from its flags, never the environment" {
     run_uninstall_main_with_data_probe --with-data
     [ "$status" -eq 0 ] || return 1
     [[ "$output" == *"with_data=1 delete_mode=trash"* ]] || return 1
 
-    # An inherited environment value never preselects data on its own.
+    # An inherited environment value never changes the selection: the default
+    # is the app's own identifier data, and --keep-data starts with none.
     run_uninstall_main_with_data_probe
+    [ "$status" -eq 0 ] || return 1
+    [[ "$output" == *"with_data=own delete_mode=trash"* ]] || return 1
+
+    run_uninstall_main_with_data_probe --keep-data
     [ "$status" -eq 0 ] || return 1
     [[ "$output" == *"with_data=0 delete_mode=trash"* ]] || return 1
 

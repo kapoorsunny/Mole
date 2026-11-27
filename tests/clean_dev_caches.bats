@@ -440,6 +440,113 @@ EOF
     [[ "$output" != *"/.aws/"* && "$output" != *"AWS CLI"* ]] || return 1
 }
 
+@test "clean_dev_cloud keeps kubectl credential plugin caches (#2096)" {
+    # kubelogin, Azure kubelogin and aws-iam-authenticator keep tokens and
+    # cached credentials beside kubectl's own discovery and HTTP caches.
+    local test_home="$HOME/kube-cache-home"
+    local kube_cache="$test_home/.kube/cache"
+    mkdir -p "$kube_cache/discovery" "$kube_cache/http" "$kube_cache/oidc-login" \
+        "$kube_cache/kubelogin" "$kube_cache/aws-iam-authenticator"
+
+    run env HOME="$test_home" PATH="/usr/bin:/bin" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/dev.sh"
+DRY_RUN=false
+clean_github_cli_cache() { :; }
+safe_clean() {
+    local description="${!#}"
+    while [[ $# -gt 1 ]]; do
+        printf 'CLEAN=%s|%s\n' "$description" "$1"
+        shift
+    done
+}
+clean_dev_cloud
+EOF
+
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"CLEAN=Kubernetes cache|$kube_cache/discovery"* ]] || return 1
+    [[ "$output" == *"CLEAN=Kubernetes cache|$kube_cache/http"* ]] || return 1
+    [[ "$output" != *"oidc-login"* && "$output" != *"kubelogin"* ]] || return 1
+    [[ "$output" != *"aws-iam-authenticator"* ]] || return 1
+    rm -rf "$test_home"
+}
+
+@test "clean_dev_cicd keeps the SonarScanner SSL stores (#2117)" {
+    # SonarScanner reads the truststore and keystore the user created from
+    # ~/.sonar/ssl; only its downloads in ~/.sonar/cache are rebuildable.
+    local test_home="$HOME/sonar-home"
+    local sonar_home="$test_home/.sonar"
+    mkdir -p "$sonar_home/cache/engine" "$sonar_home/ssl"
+    touch "$sonar_home/ssl/truststore.p12" "$sonar_home/ssl/keystore.p12"
+
+    run env HOME="$test_home" PATH="/usr/bin:/bin" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/dev.sh"
+DRY_RUN=false
+safe_clean() {
+    local description="${!#}"
+    while [[ $# -gt 1 ]]; do
+        printf 'CLEAN=%s|%s\n' "$description" "$1"
+        shift
+    done
+}
+clean_dev_cicd
+EOF
+
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"CLEAN=SonarQube cache|$sonar_home/cache/engine"* ]] || return 1
+    [[ "$output" != *"$sonar_home/ssl"* ]] || return 1
+    rm -rf "$test_home"
+}
+
+@test "clean_dev_shell keeps the Oh My Zsh completions folder (#2110)" {
+    # An open zsh autoloads a registered completion from it on the first Tab.
+    local test_home="$HOME/omz-home"
+    mkdir -p "$test_home/.oh-my-zsh/cache/completions" "$test_home/.oh-my-zsh/cache/plugin-data"
+    touch "$test_home/.oh-my-zsh/cache/completions/_gh" "$test_home/.oh-my-zsh/cache/grep-alias"
+
+    run env HOME="$test_home" PATH="/usr/bin:/bin" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/dev.sh"
+DRY_RUN=false
+safe_clean() {
+    local description="${!#}"
+    while [[ $# -gt 1 ]]; do
+        printf 'CLEAN=%s|%s\n' "$description" "$1"
+        shift
+    done
+}
+clean_dev_shell
+EOF
+
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"CLEAN=Oh My Zsh cache|$test_home/.oh-my-zsh/cache/plugin-data"* ]] || return 1
+    [[ "$output" == *"CLEAN=Oh My Zsh cache|$test_home/.oh-my-zsh/cache/grep-alias"* ]] || return 1
+    [[ "$output" != *"completions"* ]] || return 1
+    rm -rf "$test_home"
+}
+
+@test "clean_dev_shell runs no Oh My Zsh row when only completions exist (#2110)" {
+    local test_home="$HOME/omz-only-home"
+    mkdir -p "$test_home/.oh-my-zsh/cache/completions"
+
+    run env HOME="$test_home" PATH="/usr/bin:/bin" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/dev.sh"
+DRY_RUN=false
+safe_clean() { printf 'CLEAN=%s\n' "$*"; }
+clean_dev_shell
+EOF
+
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" != *"Oh My Zsh"* ]] || return 1
+    rm -rf "$test_home"
+}
+
 @test "clean_dev_cloud stops on GitHub CLI probe or clear cancellation" {
     local failure_phase failure_rc
     for failure_phase in help clear; do
@@ -3449,9 +3556,9 @@ EOF
     [[ "$output" == *"Go build cache"* ]] || return 1
     # Nothing may be handed to the owner command for the symlinked root, and
     # the physical directory the link points at must survive.
-    ! grep -q -- "-modcache" "$trace" || return 1
+    ! grep -q -- " -modcache" "$trace" || return 1
     [[ -d "$module_physical" ]] || return 1
-    grep -qFx "env GOCACHE=$build_root go clean -cache" "$trace" || return 1
+    grep -qFx "env GOFLAGS=-modcacherw GOCACHE=$build_root go clean -cache" "$trace" || return 1
     rm -f "$trace" "$module_link"
     rm -rf "$module_physical" "$build_root"
 }
@@ -3508,15 +3615,50 @@ EOF
         echo "$output"
         return 1
     }
-    ! grep -q -- "-modcache" "$trace" || {
+    ! grep -q -- " -modcache" "$trace" || {
         cat "$trace"
         return 1
     }
     [[ -f "$outside_root/victim.txt" ]] || return 1
     # The concurrency-safe build cache is unaffected by the module-root swap.
-    grep -qFx "env GOCACHE=$build_root go clean -cache" "$trace" || return 1
+    grep -qFx "env GOFLAGS=-modcacherw GOCACHE=$build_root go clean -cache" "$trace" || return 1
     rm -f "$trace" "$module_root"
     rm -rf "$outside_root" "$build_root"
+}
+
+@test "clean_dev_go pins GOFLAGS so a saved flag cannot widen go clean" {
+    command -v go > /dev/null 2>&1 || skip "needs a real go"
+    # The real go: a stub cannot show what a flag saved with `go env -w` does.
+    local module_root="$HOME/go-module-saved-flag"
+    local build_root="$HOME/go-build-saved-flag"
+    local goenv="$HOME/go-saved-flag.env"
+    mkdir -p "$module_root/cache/download" "$build_root/00"
+    echo module > "$module_root/cache/download/kept"
+    echo object > "$build_root/00/object"
+    printf 'GOFLAGS=-modcache\n' > "$goenv"
+
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" \
+        GOENV="$goenv" GOMODCACHE="$module_root" GOCACHE="$build_root" GOTOOLCHAIN=local \
+        GO_BUILD_ROOT="$build_root" \
+        /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/dev.sh"
+unset GOFLAGS
+DRY_RUN=false
+is_path_whitelisted() { return 1; }
+should_protect_path() { return 1; }
+go_cache_process_state() { return 1; }
+note_activity() { :; }
+cd /
+clean_go_cache_root "$GO_BUILD_ROOT" GOCACHE -cache "Go build cache"
+EOF
+
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [ ! -e "$build_root/00/object" ] || { echo "$output"; return 1; }
+    # The saved -modcache would have removed this root, which was never checked.
+    [ -f "$module_root/cache/download/kept" ] || { echo "$output"; return 1; }
+    rm -rf "$module_root" "$build_root" "$goenv"
 }
 
 @test "clean_dev_go uses owner dry-run for the same cache roots" {
@@ -3555,8 +3697,8 @@ EOF
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
     [[ "$output" == *"Go module cache · would clean"* ]] || return 1
     [[ "$output" == *"Go build cache · would clean"* ]] || return 1
-    grep -qFx "env GOMODCACHE=$module_root go clean -n -modcache" "$trace" || return 1
-    grep -qFx "env GOCACHE=$build_root go clean -n -cache" "$trace" || return 1
+    grep -qFx "env GOFLAGS=-modcacherw GOMODCACHE=$module_root go clean -n -modcache" "$trace" || return 1
+    grep -qFx "env GOFLAGS=-modcacherw GOCACHE=$build_root go clean -n -cache" "$trace" || return 1
     rm -f "$trace"
     rm -rf "$module_root" "$build_root"
 }
@@ -3597,8 +3739,8 @@ EOF
 
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
     [[ "$output" == *"SKIP=Go module cache|$module_root"* ]] || return 1
-    grep -qFx "env GOCACHE=$build_root go clean -cache" "$trace" || return 1
-    [[ "$(cat "$trace")" != *"-modcache"* ]] || return 1
+    grep -qFx "env GOFLAGS=-modcacherw GOCACHE=$build_root go clean -cache" "$trace" || return 1
+    [[ "$(cat "$trace")" != *" -modcache"* ]] || return 1
     rm -f "$trace"
     rm -rf "$module_root" "$build_root"
 }
@@ -3701,7 +3843,7 @@ run_with_timeout() {
         return 0
     fi
     printf '%s\n' "$*" >> "$GO_TRACE"
-    [[ "$*" == *"-modcache"* ]] && return 124
+    [[ "$*" == *" -modcache"* ]] && return 124
     return 0
 }
 is_path_whitelisted() { return 1; }
@@ -3718,7 +3860,7 @@ EOF
     [[ "$output" == *"rc=0"* ]] || return 1
     [[ "$output" == *"CANCEL=0"* ]] || return 1
     [[ "$output" == *"Go module cache · stopped (timed out)"* ]] || return 1
-    grep -qFx "env GOCACHE=$build_root go clean -cache" "$trace" || return 1
+    grep -qFx "env GOFLAGS=-modcacherw GOCACHE=$build_root go clean -cache" "$trace" || return 1
     grep -qF "Go module cache timed out after" "$HOME/Library/Logs/mole/mole.log" || return 1
     rm -f "$trace"
     rm -rf "$module_root" "$build_root"
@@ -3755,7 +3897,7 @@ run_with_timeout() {
         return 0
     fi
     printf '%s\n' "$*" >> "$GO_TRACE"
-    [[ "$*" == *"-modcache"* ]] && return 243
+    [[ "$*" == *" -modcache"* ]] && return 243
     return 0
 }
 is_path_whitelisted() { return 1; }
@@ -3772,7 +3914,7 @@ EOF
     [[ "$output" == *"rc=0"* ]] || { echo "$output"; return 1; }
     [[ "$output" == *"CANCEL=0"* ]] || { echo "$output"; return 1; }
     [[ "$output" == *"Go module cache · stopped (owner cleanup failed)"* ]] || { echo "$output"; return 1; }
-    grep -qFx "env GOCACHE=$build_root go clean -cache" "$trace" || return 1
+    grep -qFx "env GOFLAGS=-modcacherw GOCACHE=$build_root go clean -cache" "$trace" || return 1
     rm -f "$trace"
     rm -rf "$module_root" "$build_root"
 }
@@ -4309,6 +4451,79 @@ EOF
     [[ "$output" == *"T3 Code"* ]] || return 1
     # Report only: the worktree must still exist afterwards.
     [ -f "$test_home/.t3/worktrees/project/topic/file" ]
+}
+
+@test "agent_worktree_containers adds the repositories Claude Code and Codex record" {
+    local h="$HOME/wt-records-home"
+    # Recorded repositories outside every project root, each with its own containers.
+    mkdir -p "$h/work/app/.git" "$h/work/app/sub" "$h/work/app/.claude/worktrees/a" "$h/work/app/.codex/worktrees/b"
+    mkdir -p "$h/clients/tool/.git" "$h/clients/tool/.codex/worktrees/c"
+    mkdir -p "$h/threads/svc/.git" "$h/threads/svc/.claude/worktrees/d"
+    # Never looked at: a consent folder, Library, a dot folder, a link, a worktree's own .git file, a linked .claude.
+    mkdir -p "$h/Documents/secret/.git" "$h/Documents/secret/.claude/worktrees/x"
+    mkdir -p "$h/Library/proj/.git" "$h/Library/proj/.claude/worktrees/x"
+    mkdir -p "$h/.hidden/proj/.git" "$h/.hidden/proj/.claude/worktrees/x"
+    mkdir -p "$h/real/linked/.git" "$h/real/linked/.claude/worktrees/x"
+    ln -s "$h/real/linked" "$h/viaLink"
+    mkdir -p "$h/sub/wt/.claude/worktrees/x"
+    printf 'gitdir: /elsewhere\n' > "$h/sub/wt/.git"
+    mkdir -p "$h/shadow/repo/.git" "$h/elsewhere-claude/worktrees/x"
+    ln -s "$h/elsewhere-claude" "$h/shadow/repo/.claude"
+
+    cat > "$h/.claude.json" << JSON
+{"numStartups": null, "projects": {
+  "$h/work/app/sub": {"allowedTools": []},
+  "$h/work/app/.claude/worktrees/a/src": {},
+  "$h/WORK/app": {},
+  "$h/Documents/secret": {},
+  "$h/Library/proj": {},
+  "$h/.hidden/proj": {},
+  "$h/viaLink": {},
+  "$h/sub/wt": {},
+  "$h/shadow/repo": {},
+  "$h/../escape": {},
+  "/tmp/outside": {}
+}}
+JSON
+    mkdir -p "$h/.codex"
+    printf '[projects."%s"]\ntrust_level = "trusted"\n\n[projects.%s]\n' "$h/clients/tool" "unquoted" > "$h/.codex/config.toml"
+    /usr/bin/sqlite3 "$h/.codex/state_2.sqlite" "CREATE TABLE threads(cwd TEXT); INSERT INTO threads VALUES('$h/nowhere');"
+    /usr/bin/sqlite3 "$h/.codex/state_10.sqlite" "CREATE TABLE threads(cwd TEXT); INSERT INTO threads VALUES('$h/threads/svc'),('$h/threads/svc');"
+
+    run env HOME="$h" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/user.sh"
+agent_worktree_containers | tr '\0' '\n'
+EOF
+
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    local physical
+    physical=$(cd "$h" && /bin/pwd -P)
+    local listed
+    listed=$(printf '%s\n' "$output" | sed -e "s#^$physical/##" -e "s#^$h/##" | sort)
+    local expected
+    expected=$(printf '%s\n' clients/tool/.codex/worktrees threads/svc/.claude/worktrees work/app/.claude/worktrees work/app/.codex/worktrees | sort)
+    [[ "$listed" == "$expected" ]] || { echo "listed:"; echo "$listed"; return 1; }
+}
+
+@test "agent_worktree_containers cuts a recorded worktree path only below HOME" {
+    # HOME itself sits inside a worktree container, as a checkout's test HOME does.
+    local h="$HOME/outer/.claude/worktrees/w/home"
+    mkdir -p "$h/work/app/.git" "$h/work/app/.claude/worktrees/a/src"
+    printf '{"projects": {"%s/work/app/.claude/worktrees/a/src": {}}}' "$h" > "$h/.claude.json"
+
+    run env HOME="$h" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/user.sh"
+agent_worktree_containers | tr '\0' '\n'
+EOF
+
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    local physical
+    physical=$(cd "$h" && /bin/pwd -P)
+    [[ "$output" == "$physical/work/app/.claude/worktrees" || "$output" == "$h/work/app/.claude/worktrees" ]] || { echo "listed: $output"; return 1; }
 }
 
 @test "report_agent_worktree_candidates skips a row on a size timeout without cancelling clean" {
@@ -5587,3 +5802,36 @@ EOF
     # The first cache's command ran; the interrupt stops the second one.
     [[ "$output" == *"RAN=1"* ]] || { echo "$output"; return 1; }
 }
+
+@test "clean_instruments_unsaved_traces takes only day-old Instruments traces in the temp root" {
+    local troot="$HOME/darwin-T"
+    mkdir -p "$troot/nested"
+    touch -t 202601010000 "$troot/instrumentsAb12.ktrace" "$troot/instruments-x.ktrace" \
+        "$troot/notinstruments1.ktrace" "$troot/nested/instrumentsZ9.ktrace"
+    touch "$troot/instrumentsFresh1.ktrace"
+    touch -t 202601010000 "$troot/instrumentsLinked2.ktrace"
+    ln "$troot/instrumentsLinked2.ktrace" "$troot/hardlink-copy"
+
+    run env HOME="$HOME" TROOT="$troot" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/dev.sh"
+_mole_darwin_user_temp_dir() { printf '%s\n' "$TROOT"; }
+mole_pgrep_any() { return "${PGREP_RC:-1}"; }
+safe_clean() { local label="${!#}" target; for target in "${@:1:$#-1}"; do echo "CLEAN:$target|$label"; done; }
+safe_clean_guarded() { local guard="$1"; shift; "$guard" || return 75; safe_clean "$@"; }
+clean_instruments_unsaved_traces
+echo "--running"
+PGREP_RC=0 clean_instruments_unsaved_traces
+echo "--unknown"
+PGREP_RC=2 clean_instruments_unsaved_traces
+EOF
+
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    local first="${output%%--running*}" rest="${output#*--running}"
+    [[ "$first" == *"CLEAN:"*"/instrumentsAb12.ktrace|Instruments unsaved traces"* ]] || { echo "$output"; return 1; }
+    [[ "$first" != *"instruments-x"* && "$first" != *"notinstruments"* && "$first" != *"nested"* ]] || { echo "$output"; return 1; }
+    [[ "$first" != *"instrumentsFresh1"* && "$first" != *"instrumentsLinked2"* ]] || { echo "$output"; return 1; }
+    [[ "$rest" != *"CLEAN:"* ]] || { echo "$output"; return 1; }
+}
+
