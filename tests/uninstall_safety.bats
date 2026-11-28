@@ -1628,6 +1628,24 @@ EOF
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
 }
 
+@test "uninstall inventory leaves out the apps of another macOS installation (#2139)" {
+	run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" MOLE_TEST_NO_AUTH=1 /bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/bin/uninstall.sh"
+volumes="$HOME/volumes"
+_MOLE_UNINSTALL_LIVE_VOLUMES_ROOT="$volumes"
+mkdir -p "$volumes/Apps Disk/Applications" \
+    "$volumes/Sequoia/Applications" "$volumes/Sequoia/System/Library/CoreServices" \
+    "$volumes/Sequoia - Data/Applications" "$volumes/Sequoia - Data/private/var/db/dslocal"
+: > "$volumes/Sequoia/System/Library/CoreServices/SystemVersion.plist"
+dirs=$(uninstall_print_app_search_dirs)
+printf '%s\n' "$dirs"
+printf '%s\n' "$dirs" | grep -Fx "$volumes/Apps Disk/Applications" > /dev/null || exit 1
+if printf '%s\n' "$dirs" | grep -F "$volumes/Sequoia" > /dev/null; then exit 1; fi
+EOF
+	[ "$status" -eq 0 ] || { echo "$output"; return 1; }
+}
+
 @test "PlayCover inventory reads flat bundle metadata and invalidates its cache (#1715)" {
 	run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" MOLE_TEST_NO_AUTH=1 /bin/bash --noprofile --norc <<'EOF'
 set -euo pipefail
@@ -2049,4 +2067,25 @@ SCRIPT
 	)"
 
 	[[ "$result" == *"com.runningwithcrayons.Alfred-Preferences"* ]]
+}
+
+@test "uninstall warns about a driver extension left behind, not only a system extension (#2131)" {
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc << 'SH'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/uninstall/batch.sh"
+root=$(mktemp -d "$HOME/system-extensions.XXXXXX")
+mkdir -p "$root/1111/com.logi.ghub.hidfilter.dext" "$root/2222/com.logi.ghub.audiooverride.dext" \
+    "$root/3333/com.example.camera.extension.systemextension" "$root/4444/com.logi.ghubx.hidfilter.dext"
+_uninstall_leaves_system_extension com.logi.ghub "$root" || { echo "dext missed"; exit 1; }
+_uninstall_leaves_system_extension com.example.camera "$root" || { echo "systemextension missed"; exit 1; }
+# A longer id is another product, and a name is not a bundle id.
+! _uninstall_leaves_system_extension com.logi.ghu "$root" || { echo "prefix matched"; exit 1; }
+! _uninstall_leaves_system_extension com.other.app "$root" || { echo "unrelated matched"; exit 1; }
+! _uninstall_leaves_system_extension ghub "$root" || { echo "bare name matched"; exit 1; }
+rm -rf "$root/1111" "$root/2222"
+! _uninstall_leaves_system_extension com.logi.ghub "$root" || { echo "ghubx counted as ghub"; exit 1; }
+! _uninstall_leaves_system_extension com.logi.ghub "$root/missing" || { echo "missing root matched"; exit 1; }
+SH
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
 }

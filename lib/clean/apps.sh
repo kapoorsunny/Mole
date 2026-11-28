@@ -1402,8 +1402,19 @@ _orphan_service_vendor_protected() {
     for identity in "$@"; do
         [[ -n "$identity" ]] || continue
         mole_ascii_lowercase identity "$identity"
+        # The second and third rows are the vendors uninstall sends to their own
+        # uninstallers, as Mole Mac's startup markers list them (2026-11-27):
+        # Avast and AVG by their hub ids, since a bare "avast" would cover Avast
+        # Secure Browser; Trend Micro and Cisco by product id, so Cleaner One
+        # Pro and Webex are judged like any other app.
         for token in mdm jamf crowdstrike sentinelone carbonblack defender eset sophos \
-            littlesnitch tailscale wireguard protonvpn nordvpn mullvad surge clash mihomo; do
+            littlesnitch tailscale wireguard protonvpn nordvpn mullvad surge clash mihomo \
+            puppetlabs puppethelper com.puppet. com.google.santa com.northpolesec.santa \
+            com.objective-see. kandji mosyle addigy com.microsoft.intune malwarebytes \
+            com.avast.aafm com.avast.avast com.avast.hub com.avg.hub avgantivirus \
+            kaspersky intego com.trendmicro.tmsm com.trendmicro.icore com.alibaba.security. \
+            teamviewer com.sentinel-labs. com.paloaltonetworks. com.cisco.anyconnect \
+            com.cisco.secureclient; do
             [[ "$identity" == *"$token"* ]] && return 0
         done
     done
@@ -1648,8 +1659,44 @@ clean_orphaned_system_services() {
     # cannot be ruled out. A Spotlight that cannot find Finder answers no
     # bundle-id query, so its miss proves nothing (asked once per run).
     # Statuses of 128 and above are signals and are passed on.
+    # A service named after an installed app is that app's: the label itself,
+    # then each reverse-DNS prefix down to three parts
+    # (com.bjango.istatmenus.agent, com.bjango.istatmenus). An update that
+    # moved the program left iStat Menus' agent reading as an orphan while the
+    # app ran (#2111). The answer comes from one installed-app list, read on
+    # the first question of a run (warm from the App leftovers step), because
+    # asking the resolver per prefix cost over a second each and spent the
+    # section's budget. Returns 0 when an app owns the label or the list could
+    # not be read, 1 when none does, and a signal status as it came.
+    local orphan_app_index=""
+    local orphan_app_index_state=""
+    _orphan_service_label_has_installed_app() {
+        local label="$1"
+        if [[ -z "${orphan_app_index_state:-}" ]]; then
+            orphan_app_index_state="unavailable"
+            local index_rc=0
+            if orphan_app_index=$(create_temp_file 2> /dev/null); then
+                scan_installed_apps "$orphan_app_index" > /dev/null 2>&1 || index_rc=$?
+                [[ $index_rc -ge 128 ]] && return "$index_rc"
+                # A scan that succeeded is complete by its own contract, as
+                # the App leftovers step reads it.
+                [[ $index_rc -ne 0 ]] || orphan_app_index_state="ready"
+            fi
+        fi
+        [[ "${orphan_app_index_state:-}" == "ready" ]] || return 0
+        while :; do
+            LC_ALL=C grep -Fxqi -- "$label" "${orphan_app_index:-}" 2> /dev/null && return 0
+            label="${label%.*}"
+            [[ "$label" == *.*.* ]] || return 1
+        done
+    }
+
     _live_helper_app_ruled_out() {
         local helper_bundle_id="$1"
+        local label_owner_rc=0
+        _orphan_service_label_has_installed_app "$helper_bundle_id" || label_owner_rc=$?
+        [[ $label_owner_rc -ge 128 ]] && return "$label_owner_rc"
+        [[ $label_owner_rc -eq 1 ]] || return 1
         local resolver_rc=0
         bundle_has_installed_app "$helper_bundle_id" \
             "$service_cleanup_deadline" || resolver_rc=$?
@@ -1800,6 +1847,17 @@ clean_orphaned_system_services() {
         # If the binary is in a package-manager / system path, skip.
         _is_package_managed_binary "$binary" && return 1
 
+        # The program is gone, but an installed app the label names still owns
+        # the registration. Only the installed-app list answers here: an
+        # unanswering Spotlight must not hide every orphan whose program is
+        # missing.
+        local label_owner_rc=0
+        _orphan_service_label_has_installed_app "$bundle_id" || label_owner_rc=$?
+        [[ $label_owner_rc -eq 1 ]] || {
+            [[ $label_owner_rc -ge 128 ]] && return "$label_owner_rc"
+            return 1
+        }
+
         return 0 # orphaned
     }
 
@@ -1857,6 +1915,17 @@ clean_orphaned_system_services() {
         orphaned_count=$((orphaned_count + 1))
     }
 
+    # What each registration names as its program, remembered for this run
+    # under the plist's path and identity (device, inode, mtime, size). Every
+    # helper asks about every registration, at listing and again before
+    # removal, and each answer is two or more sudo PlistBuddy reads: three
+    # Adobe helpers on a Mac with many registrations ran the whole step to its
+    # 60 second limit and removed nothing (#2130). A registration that is new,
+    # replaced or rewritten has another identity and is read again, so the
+    # scan still sees every change; only conclusive answers are remembered.
+    _ORPHAN_REFERENCE_MEMO_KEYS=()
+    _ORPHAN_REFERENCE_MEMO_VALUES=()
+
     # Returns 0 only after a complete, bounded scan proves that no surviving
     # LaunchDaemon or LaunchAgent references this helper. A plist removal and
     # its Program helper form one cleanup family: if the registration survives,
@@ -1905,7 +1974,24 @@ clean_orphaned_system_services() {
                 fi
                 local referenced_binary=""
                 local binary_rc=0
-                referenced_binary=$(_plist_binary_path "$plist") || binary_rc=$?
+                local memo_key="" memo_identity="" memo_index=0 memo_hit=false
+                memo_identity=$(/usr/bin/stat -f '%d:%i:%m:%z' "$plist" 2> /dev/null) || memo_identity=""
+                if [[ -n "$memo_identity" ]]; then
+                    memo_key="$plist|$memo_identity"
+                    for ((memo_index = 0; memo_index < ${#_ORPHAN_REFERENCE_MEMO_KEYS[@]}; memo_index++)); do
+                        if [[ "${_ORPHAN_REFERENCE_MEMO_KEYS[memo_index]}" == "$memo_key" ]]; then
+                            referenced_binary="${_ORPHAN_REFERENCE_MEMO_VALUES[memo_index]}"
+                            memo_hit=true
+                            break
+                        fi
+                    done
+                fi
+                if [[ "$memo_hit" == "true" ]]; then
+                    # Remembered as naming no absolute program.
+                    [[ -n "$referenced_binary" ]] || continue
+                else
+                    referenced_binary=$(_plist_binary_path "$plist") || binary_rc=$?
+                fi
                 if mole_rc_timeout_or_signal "$binary_rc"; then
                     reference_scan_rc=$binary_rc
                     break
@@ -1934,8 +2020,16 @@ clean_orphaned_system_services() {
                         reference_scan_rc=2
                         break
                     elif [[ $binary_rc -eq 1 ]]; then
+                        if [[ -n "$memo_key" ]]; then
+                            _ORPHAN_REFERENCE_MEMO_KEYS+=("$memo_key")
+                            _ORPHAN_REFERENCE_MEMO_VALUES+=("")
+                        fi
                         continue
                     fi
+                fi
+                if [[ "$memo_hit" != "true" && -n "$memo_key" && -n "$referenced_binary" ]]; then
+                    _ORPHAN_REFERENCE_MEMO_KEYS+=("$memo_key")
+                    _ORPHAN_REFERENCE_MEMO_VALUES+=("$referenced_binary")
                 fi
 
                 if [[ "$referenced_binary" == "$helper" ]] ||
@@ -2319,6 +2413,19 @@ clean_orphaned_system_services() {
                 continue
             fi
             if [[ "$DRY_RUN" == "true" ]]; then
+                # The real run's sink validates the path once more without
+                # uninstall mode, counts a protected refusal and removes nothing
+                # on any other; ask the same question here so the preview never
+                # lists a file the real run keeps (#2140).
+                if ! validate_path_for_deletion "$orphan_file"; then
+                    if should_protect_path "$orphan_file"; then
+                        debug_log "Skipping protected orphaned service: $orphan_file"
+                        skipped_protected_count=$((skipped_protected_count + 1))
+                    else
+                        debug_log "Keeping orphaned service the removal would refuse: $orphan_file"
+                    fi
+                    continue
+                fi
                 debug_log "[DRY RUN] Would remove orphaned service: $orphan_file"
                 local orphan_size_kb=0
                 local orphan_size_rc=0

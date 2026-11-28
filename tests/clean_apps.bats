@@ -2264,6 +2264,9 @@ EOF
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/apps.sh"
+# The label check reads one installed-app list; an empty one keeps this case
+# independent of the apps and caches other cases leave in the shared HOME.
+scan_installed_apps() { : > "$1"; }
 
 start_section_spinner() { :; }
 stop_section_spinner() { :; }
@@ -2330,6 +2333,9 @@ EOF
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/apps.sh"
+# The label check reads one installed-app list; an empty one keeps this case
+# independent of the apps and caches other cases leave in the shared HOME.
+scan_installed_apps() { : > "$1"; }
 
 start_section_spinner() { :; }
 stop_section_spinner() { :; }
@@ -2391,6 +2397,9 @@ EOF
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/apps.sh"
+# The label check reads one installed-app list; an empty one keeps this case
+# independent of the apps and caches other cases leave in the shared HOME.
+scan_installed_apps() { : > "$1"; }
 _mole_bounded_sudo() { return 124; }
 note_activity() { printf 'ACTIVITY\n'; }
 clean_orphaned_system_services
@@ -2407,6 +2416,9 @@ EOF
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/apps.sh"
+# The label check reads one installed-app list; an empty one keeps this case
+# independent of the apps and caches other cases leave in the shared HOME.
+scan_installed_apps() { : > "$1"; }
 start_section_spinner() { :; }
 stop_section_spinner() { :; }
 note_activity() { printf 'ACTIVITY\n'; }
@@ -2430,6 +2442,9 @@ EOF
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/apps.sh"
+# The label check reads one installed-app list; an empty one keeps this case
+# independent of the apps and caches other cases leave in the shared HOME.
+scan_installed_apps() { : > "$1"; }
 
 start_section_spinner() { :; }
 stop_section_spinner() { :; }
@@ -2491,6 +2506,9 @@ EOF
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/apps.sh"
+# The label check reads one installed-app list; an empty one keeps this case
+# independent of the apps and caches other cases leave in the shared HOME.
+scan_installed_apps() { : > "$1"; }
 
 start_section_spinner() { :; }
 stop_section_spinner() { :; }
@@ -2566,6 +2584,9 @@ EOF
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/apps.sh"
+# The label check reads one installed-app list; an empty one keeps this case
+# independent of the apps and caches other cases leave in the shared HOME.
+scan_installed_apps() { : > "$1"; }
 
 start_section_spinner() { :; }
 stop_section_spinner() { :; }
@@ -2617,6 +2638,9 @@ EOF
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/apps.sh"
+# The label check reads one installed-app list; an empty one keeps this case
+# independent of the apps and caches other cases leave in the shared HOME.
+scan_installed_apps() { : > "$1"; }
 
 start_section_spinner() { :; }
 stop_section_spinner() { :; }
@@ -2672,6 +2696,9 @@ EOF
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/apps.sh"
+# The label check reads one installed-app list; an empty one keeps this case
+# independent of the apps and caches other cases leave in the shared HOME.
+scan_installed_apps() { : > "$1"; }
 
 start_section_spinner() { :; }
 stop_section_spinner() { :; }
@@ -2750,6 +2777,9 @@ EOF
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/apps.sh"
+# The label check reads one installed-app list; an empty one keeps this case
+# independent of the apps and caches other cases leave in the shared HOME.
+scan_installed_apps() { : > "$1"; }
 
 start_section_spinner() { :; }
 stop_section_spinner() { :; }
@@ -2807,6 +2837,9 @@ EOF
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/apps.sh"
+# The label check reads one installed-app list; an empty one keeps this case
+# independent of the apps and caches other cases leave in the shared HOME.
+scan_installed_apps() { : > "$1"; }
 
 start_section_spinner() { :; }
 stop_section_spinner() { :; }
@@ -2870,6 +2903,9 @@ EOF
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/apps.sh"
+# The label check reads one installed-app list; an empty one keeps this case
+# independent of the apps and caches other cases leave in the shared HOME.
+scan_installed_apps() { : > "$1"; }
 
 start_section_spinner() { :; }
 stop_section_spinner() { :; }
@@ -2942,6 +2978,9 @@ EOF
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/apps.sh"
+# The label check reads one installed-app list; an empty one keeps this case
+# independent of the apps and caches other cases leave in the shared HOME.
+scan_installed_apps() { : > "$1"; }
 
 start_section_spinner() { :; }
 stop_section_spinner() { :; }
@@ -3018,6 +3057,9 @@ EOF
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/apps.sh"
+# The label check reads one installed-app list; an empty one keeps this case
+# independent of the apps and caches other cases leave in the shared HOME.
+scan_installed_apps() { : > "$1"; }
 
 start_section_spinner() { :; }
 stop_section_spinner() { :; }
@@ -3083,6 +3125,9 @@ EOF
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/apps.sh"
+# The label check reads one installed-app list; an empty one keeps this case
+# independent of the apps and caches other cases leave in the shared HOME.
+scan_installed_apps() { : > "$1"; }
 
 start_section_spinner() { :; }
 stop_section_spinner() { :; }
@@ -3148,6 +3193,9 @@ EOF
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/apps.sh"
+# The label check reads one installed-app list; an empty one keeps this case
+# independent of the apps and caches other cases leave in the shared HOME.
+scan_installed_apps() { : > "$1"; }
 
 start_section_spinner() { :; }
 stop_section_spinner() { :; }
@@ -3224,6 +3272,9 @@ EOF
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/apps.sh"
+# The label check reads one installed-app list; an empty one keeps this case
+# independent of the apps and caches other cases leave in the shared HOME.
+scan_installed_apps() { : > "$1"; }
 
 start_section_spinner() { :; }
 stop_section_spinner() { :; }
@@ -3292,6 +3343,9 @@ EOF
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/apps.sh"
+# The label check reads one installed-app list; an empty one keeps this case
+# independent of the apps and caches other cases leave in the shared HOME.
+scan_installed_apps() { : > "$1"; }
 
 start_section_spinner() { :; }
 stop_section_spinner() { :; }
@@ -3364,6 +3418,9 @@ EOF
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/apps.sh"
+# The label check reads one installed-app list; an empty one keeps this case
+# independent of the apps and caches other cases leave in the shared HOME.
+scan_installed_apps() { : > "$1"; }
 
 start_section_spinner() { :; }
 stop_section_spinner() { :; }
@@ -3448,6 +3505,9 @@ EOF
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/apps.sh"
+# The label check reads one installed-app list; an empty one keeps this case
+# independent of the apps and caches other cases leave in the shared HOME.
+scan_installed_apps() { : > "$1"; }
 
 start_section_spinner() { :; }
 stop_section_spinner() { :; }
@@ -3519,6 +3579,9 @@ EOF
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/apps.sh"
+# The label check reads one installed-app list; an empty one keeps this case
+# independent of the apps and caches other cases leave in the shared HOME.
+scan_installed_apps() { : > "$1"; }
 
 start_section_spinner() { :; }
 stop_section_spinner() { :; }
@@ -3572,6 +3635,9 @@ EOF
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/apps.sh"
+# The label check reads one installed-app list; an empty one keeps this case
+# independent of the apps and caches other cases leave in the shared HOME.
+scan_installed_apps() { : > "$1"; }
 
 start_section_spinner() { :; }
 stop_section_spinner() { :; }
@@ -3628,6 +3694,9 @@ EOF
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/apps.sh"
+# The label check reads one installed-app list; an empty one keeps this case
+# independent of the apps and caches other cases leave in the shared HOME.
+scan_installed_apps() { : > "$1"; }
 
 start_section_spinner() { :; }
 stop_section_spinner() { :; }
@@ -3676,6 +3745,98 @@ EOF
     [[ "$output" != *"REFERENCE_RC:0"* ]]
 }
 
+@test "orphan helper reference scan reads each unchanged registration once across helpers (#2130)" {
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" MOLE_TEST_MODE=0 MOLE_TEST_NO_AUTH=0 \
+        DRY_RUN=false MOLE_DRY_RUN=0 /bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/apps.sh"
+# The label check reads one installed-app list; an empty one keeps this case
+# independent of the apps and caches other cases leave in the shared HOME.
+scan_installed_apps() { : > "$1"; }
+
+start_section_spinner() { :; }
+stop_section_spinner() { :; }
+note_activity() { :; }
+debug_log() { :; }
+should_protect_path() { return 1; }
+bundle_has_installed_app() { return 1; }
+
+tmp_dir=$(mktemp -d)
+count_file="$tmp_dir/reads"
+: > "$count_file"
+plists=()
+for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    plist="$tmp_dir/com.example.other$i.plist"
+    /usr/libexec/PlistBuddy -c "Add :Program string /usr/local/bin/other$i" "$plist" > /dev/null
+    plists+=("$plist")
+done
+# The three registrations that name the helpers sit last, the slow order.
+for name in one two three; do
+    plist="$tmp_dir/com.example.helper-$name.plist"
+    /usr/libexec/PlistBuddy -c "Add :Program string /Library/PrivilegedHelperTools/com.example.$name" "$plist" > /dev/null
+    plists+=("$plist")
+done
+reference_scan=false
+_mole_materialize_bounded_sudo_find() {
+    if [[ "$reference_scan" == "true" && "$3" == "/Library/LaunchDaemons" ]]; then
+        printf '%s\0' "${plists[@]}" > "$1"
+    else
+        : > "$1"
+    fi
+}
+sudo() {
+    [[ "${1:-}" == "-n" ]] && shift
+    case "${1:-}" in
+        true) return 0 ;;
+        /usr/libexec/PlistBuddy)
+            [[ "$reference_scan" == "true" ]] && echo read >> "$count_file"
+            command "$@"
+            ;;
+        *) return 0 ;;
+    esac
+}
+
+clean_orphaned_system_services
+reference_scan=true
+service_cleanup_deadline=$((SECONDS + 30))
+reads() { wc -l < "$count_file" | tr -d ' '; }
+# Called directly, never in a command substitution: the memo lives in this shell.
+check() {
+    r=0
+    _orphan_service_helper_is_unreferenced "/Library/PrivilegedHelperTools/com.example.$1" "$service_cleanup_deadline" || r=$?
+}
+
+check one; [[ "$r" == "1" ]] || { echo "one: $r"; exit 1; }
+first=$(reads)
+check two; [[ "$r" == "1" ]] || { echo "two: $r"; exit 1; }
+check three; [[ "$r" == "1" ]] || { echo "three: $r"; exit 1; }
+after_three=$(reads)
+# A second pass, as before removal, over unchanged registrations.
+for name in one two three; do check "$name"; [[ "$r" == "1" ]] || { echo "again $name: $r"; exit 1; }; done
+second_pass=$(reads)
+printf 'READS first=%s three=%s again=%s\n' "$first" "$after_three" "$second_pass"
+# One helper reads up to its own registration; the next two add only the two
+# registrations not yet read, and the second pass reads nothing.
+[[ "$after_three" -le $((first + 6)) ]] || { echo "later helpers re-read the inventory"; exit 1; }
+[[ "$second_pass" -eq "$after_three" ]] || { echo "the second pass read again"; exit 1; }
+# An unreferenced helper is still proven by the whole inventory.
+check four; [[ "$r" == "0" ]] || { echo "four: $r"; exit 1; }
+# A registration rewritten to name it has another identity and is read again.
+sleep 1
+/usr/libexec/PlistBuddy -c "Set :Program /Library/PrivilegedHelperTools/com.example.four" "${plists[0]}" > /dev/null
+check four; [[ "$r" == "1" ]] || { echo "a rewritten registration was not re-read: $r"; exit 1; }
+# So is a new one.
+plist="$tmp_dir/com.example.new.plist"
+/usr/libexec/PlistBuddy -c "Add :Program string /Library/PrivilegedHelperTools/com.example.five" "$plist" > /dev/null
+plists+=("$plist")
+check five; [[ "$r" == "1" ]] || { echo "a new registration was not read: $r"; exit 1; }
+EOF
+
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"READS first="* ]] || { echo "$output"; return 1; }
+}
+
 @test "_privileged_helper_bundle_id_from_binary prefers Info.plist bundle ID over directory and executable names" {
     run env PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
 set -euo pipefail
@@ -3706,6 +3867,9 @@ EOF
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/apps.sh"
+# The label check reads one installed-app list; an empty one keeps this case
+# independent of the apps and caches other cases leave in the shared HOME.
+scan_installed_apps() { : > "$1"; }
 
 start_section_spinner() { :; }
 stop_section_spinner() { :; }
@@ -3764,6 +3928,9 @@ EOF
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/apps.sh"
+# The label check reads one installed-app list; an empty one keeps this case
+# independent of the apps and caches other cases leave in the shared HOME.
+scan_installed_apps() { : > "$1"; }
 
 start_section_spinner() { :; }
 stop_section_spinner() { :; }
@@ -3826,6 +3993,9 @@ EOF
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/apps.sh"
+# The label check reads one installed-app list; an empty one keeps this case
+# independent of the apps and caches other cases leave in the shared HOME.
+scan_installed_apps() { : > "$1"; }
 
 start_section_spinner() { :; }
 stop_section_spinner() { :; }
@@ -3904,6 +4074,9 @@ EOF
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/apps.sh"
+# The label check reads one installed-app list; an empty one keeps this case
+# independent of the apps and caches other cases leave in the shared HOME.
+scan_installed_apps() { : > "$1"; }
 
 start_section_spinner() { :; }
 stop_section_spinner() { :; }
@@ -3970,6 +4143,9 @@ EOF
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/apps.sh"
+# The label check reads one installed-app list; an empty one keeps this case
+# independent of the apps and caches other cases leave in the shared HOME.
+scan_installed_apps() { : > "$1"; }
 
 start_section_spinner() { :; }
 stop_section_spinner() { :; }
@@ -4042,6 +4218,9 @@ EOF
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/apps.sh"
+# The label check reads one installed-app list; an empty one keeps this case
+# independent of the apps and caches other cases leave in the shared HOME.
+scan_installed_apps() { : > "$1"; }
 
 start_section_spinner() { :; }
 stop_section_spinner() { :; }
@@ -4081,12 +4260,140 @@ EOF
     [[ "$output" != *"Would remove orphaned service"* ]] || return 1
 }
 
+@test "clean_orphaned_system_services dry-run keeps what the real sink would refuse (#2140)" {
+    # Same fixture and stub as the real-run case above: uninstall mode lets a
+    # vendor helper plist through the first check, and the sink's validation
+    # then refuses it by name. Both runs must report it as protected.
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" MOLE_TEST_MODE=0 MOLE_TEST_NO_AUTH=0 DRY_RUN=true /bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/apps.sh"
+# The label check reads one installed-app list; an empty one keeps this case
+# independent of the apps and caches other cases leave in the shared HOME.
+scan_installed_apps() { : > "$1"; }
+
+start_section_spinner() { :; }
+stop_section_spinner() { :; }
+note_activity() { :; }
+debug_log() { echo "debug: $*"; }
+should_protect_path() {
+  if [[ "${MOLE_UNINSTALL_MODE:-0}" == "1" ]]; then
+    return 1
+  fi
+  return 0
+}
+
+tmp_dir="$(mktemp -d)"
+tmp_plist="$tmp_dir/com.adobe.example.plist"
+/usr/libexec/PlistBuddy -c "Add :Program string $tmp_dir/missing-helper" "$tmp_plist" 2>/dev/null || true
+
+sudo() {
+  if [[ "$1" == "-n" && "$2" == "true" ]]; then
+    return 0
+  fi
+  [[ "${1:-}" == "-n" ]] && shift
+  if [[ "$1" == "find" ]]; then
+    case "$2" in
+      /Library/LaunchDaemons) printf '%s\0' "$tmp_plist" ;;
+      *) : ;;
+    esac
+    return 0
+  fi
+  command "$@"
+}
+
+clean_orphaned_system_services
+EOF
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Found 1 orphaned"* ]] || return 1
+    [[ "$output" == *"skipped 1 protected"* ]] || return 1
+    [[ "$output" != *"Would remove orphaned service"* ]] || return 1
+}
+
+@test "a service named after an installed app is not orphaned when its program is gone (#2111)" {
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" MOLE_TEST_MODE=0 MOLE_TEST_NO_AUTH=0 DRY_RUN=true /bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/apps.sh"
+
+start_section_spinner() { :; }
+stop_section_spinner() { :; }
+note_activity() { :; }
+debug_log() { echo "debug: $*"; }
+should_protect_path() { return 1; }
+# Only the app itself is installed; no app carries the agent's own id, and
+# the vendor alone (two parts) must never count as an owner.
+scan_installed_apps() { printf '%s\n' com.example com.example.vendorapp com.other.app > "$1"; }
+
+tmp_dir="$(mktemp -d)"
+owned="$tmp_dir/com.example.vendorapp.status.agent.plist"
+stray="$tmp_dir/com.example.goneapp.status.agent.plist"
+/usr/libexec/PlistBuddy -c "Add :Program string $tmp_dir/missing-agent" "$owned" 2>/dev/null || true
+/usr/libexec/PlistBuddy -c "Add :Program string $tmp_dir/missing-agent" "$stray" 2>/dev/null || true
+
+sudo() {
+  if [[ "$1" == "-n" && "$2" == "true" ]]; then
+    return 0
+  fi
+  [[ "${1:-}" == "-n" ]] && shift
+  if [[ "$1" == "find" ]]; then
+    case "$2" in
+      /Library/LaunchDaemons) printf '%s\0' "$owned" "$stray" ;;
+      *) : ;;
+    esac
+    return 0
+  fi
+  command "$@"
+}
+
+clean_orphaned_system_services
+EOF
+
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"Found 1 orphaned"* ]] || { echo "$output"; return 1; }
+    [[ "$output" == *"Would remove orphaned service: "*"com.example.goneapp.status.agent.plist"* ]] || return 1
+    [[ "$output" != *"Would remove orphaned service: "*"com.example.vendorapp.status.agent.plist"* ]] || return 1
+}
+
+@test "an unreadable installed-app list keeps a service whose program is gone, and a signal cancels (#2111)" {
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" MOLE_TEST_MODE=0 MOLE_TEST_NO_AUTH=0 DRY_RUN=true SCAN_RC=1 /bin/bash --noprofile --norc "$BATS_TEST_DIRNAME/helpers/orphan_label_index_case.sh"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" != *"Would remove orphaned service"* ]] || { echo "$output"; return 1; }
+
+    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" MOLE_TEST_MODE=0 MOLE_TEST_NO_AUTH=0 DRY_RUN=true SCAN_RC=130 /bin/bash --noprofile --norc "$BATS_TEST_DIRNAME/helpers/orphan_label_index_case.sh"
+    [ "$status" -eq 130 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" != *"Would remove orphaned service"* ]] || return 1
+}
+
+@test "the orphan vendor guard covers the vendors uninstall sends to their own uninstallers" {
+    run env PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
+set -euo pipefail
+source "$PROJECT_ROOT/lib/core/common.sh"
+source "$PROJECT_ROOT/lib/clean/apps.sh"
+for id in com.kaspersky.kav.downloader com.teamviewer.Helper com.avast.hub.agent com.avg.hub.agent \
+    com.paloaltonetworks.gp.pangpsd com.cisco.secureclient.vpnagentd com.cisco.anyconnect.vpnagentd \
+    com.trendmicro.icore.wp com.sentinel-labs.agent com.malwarebytes.mbam.rtprotection.daemon \
+    com.kandji.agent com.google.santa.daemon com.objective-see.lulu com.microsoft.intune.agent; do
+    _orphan_service_vendor_protected "$id" "" || { echo "UNPROTECTED:$id"; exit 1; }
+done
+for id in com.cisco.webexmeetingsapp.agent com.avast.securebrowser.updater com.trendmicro.cleanerone.helper \
+    com.alibaba.dingtalk.helper com.example.plainapp.helper; do
+    if _orphan_service_vendor_protected "$id" ""; then echo "OVERMATCH:$id"; exit 1; fi
+done
+EOF
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+}
+
 @test "clean_orphaned_system_services dry-run reports unprotected orphans (#886)" {
     # MOLE_TEST_NO_AUTH=0 overrides CI default so the function executes.
     run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" MOLE_TEST_MODE=0 MOLE_TEST_NO_AUTH=0 DRY_RUN=true /bin/bash --noprofile --norc <<'EOF'
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/apps.sh"
+# The label check reads one installed-app list; an empty one keeps this case
+# independent of the apps and caches other cases leave in the shared HOME.
+scan_installed_apps() { : > "$1"; }
 
 start_section_spinner() { :; }
 stop_section_spinner() { :; }
@@ -4129,6 +4436,9 @@ EOF
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/apps.sh"
+# The label check reads one installed-app list; an empty one keeps this case
+# independent of the apps and caches other cases leave in the shared HOME.
+scan_installed_apps() { : > "$1"; }
 
 start_section_spinner() { :; }
 stop_section_spinner() { :; }
@@ -4443,6 +4753,9 @@ EOF
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/apps.sh"
+# The label check reads one installed-app list; an empty one keeps this case
+# independent of the apps and caches other cases leave in the shared HOME.
+scan_installed_apps() { : > "$1"; }
 
 start_section_spinner() { :; }
 stop_section_spinner() { :; }
@@ -4715,6 +5028,9 @@ EOF
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/clean/apps.sh"
+# The label check reads one installed-app list; an empty one keeps this case
+# independent of the apps and caches other cases leave in the shared HOME.
+scan_installed_apps() { : > "$1"; }
 
 # Every hook appends to one file because the sizing call runs inside a
 # command substitution whose output is captured.
